@@ -53,6 +53,14 @@ impl VoxelWorldConfig for BridgetWorld {
     fn voxel_texture(&self) -> Option<(String, u32)> {
         Some(("textures/voxel_atlas.png".into(), ATLAS_TEXTURE_COUNT))
     }
+
+    fn spawning_rays(&self) -> usize {
+        24
+    }
+
+    fn max_spawn_per_frame(&self) -> usize {
+        48
+    }
 }
 
 pub struct VoxelConfigPlugin;

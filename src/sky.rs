@@ -6,7 +6,7 @@ use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension}
 use crate::player::{Player, PlayerCamera, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
-const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
+pub(crate) const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
 const CELESTIAL_DISTANCE: f32 = 460.0;
 const CELESTIAL_SIZE: f32 = 52.0;
 const DAY_LENGTH_SECS: f32 = 480.0;
@@ -130,13 +130,21 @@ pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands, settings: &PlayerSe
     });
 }
 
+pub(crate) fn initial_skybox(image: Handle<Image>) -> Skybox {
+    Skybox {
+        image,
+        brightness: sky_brightness(0.0),
+        ..default()
+    }
+}
+
 pub(crate) fn spawn_sky(
     commands: &mut Commands,
+    cubemap: Handle<Image>,
     asset_server: &Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let cubemap = asset_server.load(SKY_CUBEMAP);
     commands.insert_resource(SkyCubemap {
         image: cubemap,
         configured: false,
@@ -202,7 +210,7 @@ pub(crate) fn configure_sky_cubemap(
         return;
     }
 
-    if !asset_server.is_loaded_with_dependencies(&cubemap.image) {
+    if !asset_server.load_state(&cubemap.image).is_loaded() {
         return;
     }
 
@@ -221,8 +229,10 @@ pub(crate) fn configure_sky_cubemap(
     }
 
     let brightness = sky_brightness(0.0);
+    let mut configured_any = false;
 
     for (entity, existing) in &mut cameras {
+        configured_any = true;
         match existing {
             Some(mut skybox) => {
                 skybox.image = cubemap.image.clone();
@@ -238,7 +248,10 @@ pub(crate) fn configure_sky_cubemap(
         }
     }
 
-    cubemap.configured = true;
+    if configured_any {
+        cubemap.configured = true;
+        info!("sky cubemap ready");
+    }
 }
 
 pub(crate) fn follow_sky_to_player(

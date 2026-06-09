@@ -24,8 +24,8 @@ use interaction::{
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
-    find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor, spawn_player,
-    FlyActivation, GravityMode, PlayerSettings,
+    find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor,
+    spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -39,8 +39,9 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
-    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_player, spawn_sky,
-    spawn_sun_and_ambient, update_celestial_bodies, update_day_night, DayNightCycle,
+    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_player, initial_skybox,
+    spawn_sky, spawn_sun_and_ambient, update_celestial_bodies, update_day_night, DayNightCycle,
+    SKY_CUBEMAP,
 };
 use world_gen::{ProceduralTerrain, WorldMetadata};
 
@@ -75,6 +76,10 @@ fn main() {
             },
         })
         .add_plugins(GameAudioPlugin)
+        .add_systems(
+            PreUpdate,
+            sync_player_camera.run_if(in_state(AppState::InGame)),
+        )
         .add_plugins(VoxelConfigPlugin)
         .add_plugins(NetworkPlugin)
         .init_state::<AppState>()
@@ -136,7 +141,8 @@ fn main() {
             (
                 sync_world_seed,
                 mouse_look,
-                follow_sky_to_player.after(mouse_look),
+                sync_player_camera.after(mouse_look),
+                follow_sky_to_player.after(sync_player_camera),
                 update_celestial_bodies.after(follow_sky_to_player),
                 player_movement,
                 update_block_target,
@@ -192,11 +198,24 @@ fn setup_world(
 ) {
     spawn_sun_and_ambient(&mut commands, &settings);
 
+    let sky_cubemap = asset_server.load(SKY_CUBEMAP);
+    spawn_sky(
+        &mut commands,
+        sky_cubemap.clone(),
+        &asset_server,
+        meshes,
+        materials,
+    );
+
     let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
-    let (player, _camera) = spawn_player(&mut commands, &player_name, spawn);
-    spawn_sky(&mut commands, &asset_server, meshes, materials);
+    let (player, _camera) = spawn_player(
+        &mut commands,
+        &player_name,
+        spawn,
+        initial_skybox(sky_cubemap),
+    );
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {

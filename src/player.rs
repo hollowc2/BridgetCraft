@@ -1,3 +1,4 @@
+use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -20,6 +21,7 @@ pub const DOUBLE_TAP_JUMP_WINDOW: f32 = 0.35;
 pub const MOUSE_SENSITIVITY: f32 = 0.002;
 pub const GAMEPAD_LOOK_SENSITIVITY: f32 = 2.5;
 pub const GAMEPAD_MOVE_DEADZONE: f32 = 0.15;
+pub const INITIAL_LOOK_PITCH: f32 = -0.35;
 
 #[derive(Component)]
 pub struct Player;
@@ -137,34 +139,64 @@ impl Default for PlayerSettings {
     }
 }
 
-pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> (Entity, Entity) {
+pub fn spawn_player(
+    commands: &mut Commands,
+    name: &str,
+    position: Vec3,
+    skybox: Skybox,
+) -> (Entity, Entity) {
+    let camera_rotation = Quat::from_rotation_x(INITIAL_LOOK_PITCH);
+    let eye_position = position + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+
+    let player = commands
+        .spawn((
+            Player,
+            PlayerController {
+                pitch: INITIAL_LOOK_PITCH,
+                ..PlayerController::new()
+            },
+            Transform::from_translation(position),
+            Visibility::default(),
+            Name::new(name.to_string()),
+        ))
+        .id();
+
+    // Keep the camera as its own root entity so GlobalTransform matches the eye position
+    // when bevy_voxel_world casts viewport rays in PreUpdate.
     let camera = commands
         .spawn((
             Camera3d::default(),
             Camera {
                 order: 0,
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.53, 0.75, 0.92).into()),
                 ..default()
             },
             Msaa::Off,
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
-            Transform::from_xyz(0.0, PLAYER_HEIGHT - 0.2, 0.0),
+            skybox,
+            Transform::from_translation(eye_position).with_rotation(camera_rotation),
         ))
-        .id();
-
-    let player = commands
-        .spawn((
-            Player,
-            PlayerController::new(),
-            Transform::from_translation(position),
-            Visibility::default(),
-            Name::new(name.to_string()),
-        ))
-        .add_child(camera)
         .id();
 
     (player, camera)
+}
+
+pub fn sync_player_camera(
+    players: Query<(&Transform, &PlayerController), With<Player>>,
+    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+) {
+    let Ok((player, controller)) = players.single() else {
+        return;
+    };
+    let Ok(mut camera) = cameras.single_mut() else {
+        return;
+    };
+
+    camera.translation = player.translation + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    camera.rotation =
+        Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
 }
 
 pub fn grab_cursor(mut cursor: Single<&mut CursorOptions>) {
@@ -184,8 +216,7 @@ pub fn mouse_look(
     mut motion: MessageReader<MouseMotion>,
     settings: Res<PlayerSettings>,
     gamepads: Query<(&Name, &Gamepad)>,
-    mut players: Query<(&mut PlayerController, &Children), With<Player>>,
-    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+    mut players: Query<&mut PlayerController, With<Player>>,
 ) {
     let mut delta = Vec2::ZERO;
     for event in motion.read() {
@@ -205,20 +236,13 @@ pub fn mouse_look(
         return;
     }
 
-    let Ok((mut controller, children)) = players.single_mut() else {
+    let Ok(mut controller) = players.single_mut() else {
         return;
     };
 
     controller.yaw -= delta.x * settings.mouse_sensitivity;
     controller.pitch = (controller.pitch - delta.y * settings.mouse_sensitivity)
         .clamp(-1.54, 1.54);
-
-    for child in children.iter() {
-        if let Ok(mut camera_transform) = cameras.get_mut(child) {
-            camera_transform.rotation =
-                Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
-        }
-    }
 }
 
 pub fn player_movement(

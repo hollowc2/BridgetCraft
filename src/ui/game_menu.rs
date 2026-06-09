@@ -7,7 +7,7 @@ use crate::interaction::PendingBlockEdits;
 use crate::gamepad::select_primary;
 use crate::net::replicate::{RemotePlayerBody, WorldRevertBroadcast};
 use crate::net::NetworkRole;
-use crate::player::Player;
+use crate::player::{Player, PlayerCamera};
 use crate::save::{revert_to_world_base, save_world, WorldEdits};
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::WorldMetadata;
@@ -338,6 +338,7 @@ pub fn cleanup_world(
     hud: Query<Entity, With<HudRoot>>,
     menu: Query<Entity, With<GameMenuRoot>>,
     players: Query<Entity, With<Player>>,
+    cameras: Query<Entity, With<PlayerCamera>>,
     remote_players: Query<Entity, With<RemotePlayerBody>>,
     world_scene: Query<Entity, With<WorldScene>>,
     chunks: Query<Entity, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
@@ -350,6 +351,7 @@ pub fn cleanup_world(
         .iter()
         .chain(hud.iter())
         .chain(players.iter())
+        .chain(cameras.iter())
         .chain(remote_players.iter())
         .chain(world_scene.iter())
         .chain(chunks.iter())
