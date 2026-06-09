@@ -17,9 +17,6 @@ pub struct HotbarText;
 #[derive(Component)]
 pub struct NetworkInfoText;
 
-#[derive(Component)]
-pub struct NameTag;
-
 pub fn spawn_hud(commands: &mut Commands) {
     commands
         .spawn((
@@ -159,21 +156,6 @@ pub fn update_network_info(
         lines.push(format!("Error: {err}"));
     }
     text.0 = lines.join("\n");
-}
-
-pub fn spawn_name_tag(commands: &mut Commands, player: Entity, name: &str) {
-    commands.entity(player).with_children(|parent| {
-        parent.spawn((
-            NameTag,
-            Text2d::new(name),
-            TextFont {
-                font_size: 22.0,
-                ..Default::default()
-            },
-            TextColor(Color::WHITE),
-            Transform::from_xyz(0.0, 2.2, 0.0),
-        ));
-    });
 }
 
 pub fn cleanup_hud(

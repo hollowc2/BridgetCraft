@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientTriggerExt, ServerTriggerExt, ToClients, SendTargets};
 use bevy_voxel_world::prelude::*;
 
-use crate::block::{BlockId, HotbarSelection};
+use crate::block::HotbarSelection;
 use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};

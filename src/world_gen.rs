@@ -77,7 +77,7 @@ fn terrain_voxel_fn(seed: u32) -> Box<dyn Fn(IVec3, Option<WorldVoxel<u8>>) -> W
 }
 
 pub fn decorate_trees(seed: u32, center: IVec3, radius: i32) -> Vec<(IVec3, WorldVoxel<u8>)> {
-    let mut tree_noise = Perlin::new(seed.wrapping_add(77_007));
+    let tree_noise = Perlin::new(seed.wrapping_add(77_007));
     let mut edits = Vec::new();
 
     for x in (center.x - radius)..=(center.x + radius) {
@@ -118,21 +118,4 @@ pub fn decorate_trees(seed: u32, center: IVec3, radius: i32) -> Vec<(IVec3, Worl
     }
 
     edits
-}
-
-pub fn flat_grass_lookup() -> VoxelLookupDelegate<u8> {
-    Box::new(move |_chunk_pos, _lod, _previous| {
-        Box::new(|pos: IVec3, _previous| {
-            if pos.y < 0 {
-                return WorldVoxel::Solid(BlockId::Stone.as_material());
-            }
-            if pos.y == 0 {
-                return WorldVoxel::Solid(BlockId::DirtGrass.as_material());
-            }
-            if pos.y < 0 {
-                return WorldVoxel::Solid(BlockId::Dirt.as_material());
-            }
-            WorldVoxel::Air
-        })
-    })
 }

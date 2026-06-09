@@ -114,8 +114,8 @@ fn setup_world(
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
     mut voxel_world: VoxelWorld<BridgetWorld>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    meshes: ResMut<Assets<Mesh>>,
+    materials: ResMut<Assets<StandardMaterial>>,
 ) {
     config.seed = metadata.seed;
 

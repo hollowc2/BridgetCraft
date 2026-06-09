@@ -130,10 +130,6 @@ impl BlockId {
         !matches!(self, BlockId::Water | BlockId::Glass | BlockId::Leaves)
     }
 
-    pub fn is_breakable(self) -> bool {
-        true
-    }
-
     pub fn texture_indices(self) -> [u32; 3] {
         use atlas::*;
         match self {
