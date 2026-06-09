@@ -57,8 +57,49 @@ fn main() {
         .save(&atlas_path)
         .unwrap_or_else(|err| panic!("failed to save {}: {err}", atlas_path.display()));
 
+    build_sky_cubemap(out_dir);
+
     println!("cargo:rerun-if-changed=build.rs");
     for file in textures {
         println!("cargo:rerun-if-changed={}", tiles_dir.join(file).display());
     }
+}
+
+fn build_sky_cubemap(out_dir: &Path) {
+    let other_dir = Path::new("assets/kenney_voxel-pack/PNG/Other");
+    let face_size = 512u32;
+    let faces = [
+        other_dir.join("skybox_sideClouds.png"), // +X
+        other_dir.join("skybox_sideClouds.png"), // -X
+        other_dir.join("skybox_top.png"),        // +Y
+        other_dir.join("skybox_bottom.png"),     // -Y
+        other_dir.join("skybox_sideClouds.png"), // +Z
+        other_dir.join("skybox_sideClouds.png"), // -Z
+    ];
+
+    let mut cubemap = image::RgbaImage::new(face_size, face_size * faces.len() as u32);
+    for (index, path) in faces.iter().enumerate() {
+        let face = image::open(path).unwrap_or_else(|err| {
+            panic!("failed to load skybox face {}: {err}", path.display());
+        });
+        let face = face
+            .resize_exact(face_size, face_size, image::imageops::FilterType::Triangle)
+            .to_rgba8();
+        image::imageops::overlay(
+            &mut cubemap,
+            &face,
+            0,
+            (index as u32 * face_size) as i64,
+        );
+    }
+
+    let cubemap_path = out_dir.join("sky_cubemap.png");
+    cubemap
+        .save(&cubemap_path)
+        .unwrap_or_else(|err| panic!("failed to save {}: {err}", cubemap_path.display()));
+
+    for path in faces {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    println!("cargo:rerun-if-changed={}", cubemap_path.display());
 }

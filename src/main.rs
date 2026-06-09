@@ -39,8 +39,8 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
-    apply_shadow_settings, follow_sky_to_camera, spawn_sky, spawn_sun_and_ambient,
-    update_day_night, DayNightCycle,
+    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_camera, spawn_sky,
+    spawn_sun_and_ambient, update_day_night, DayNightCycle,
 };
 use world_gen::{ProceduralTerrain, WorldMetadata};
 
@@ -140,6 +140,7 @@ fn main() {
                 update_network_info,
                 auto_save_system,
                 save_on_exit,
+                configure_sky_cubemap,
                 follow_sky_to_camera,
                 apply_shadow_settings,
                 update_day_night,

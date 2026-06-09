@@ -1,19 +1,26 @@
 use bevy::color::Mix;
+use bevy::core_pipeline::Skybox;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
+use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use crate::player::{PlayerCamera, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
-const SKY_HALF_EXTENT: f32 = 512.0;
+const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
 const CELESTIAL_DISTANCE: f32 = 460.0;
 const CELESTIAL_SIZE: f32 = 52.0;
 const DAY_LENGTH_SECS: f32 = 480.0;
+const DAY_SKY_BRIGHTNESS: f32 = 1_000.0;
+const NIGHT_SKY_BRIGHTNESS: f32 = 140.0;
 
-const SIDE_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/skybox_sideClouds.png";
-const TOP_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/skybox_top.png";
-const BOTTOM_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/skybox_bottom.png";
 const SUN_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/sun.png";
 const MOON_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/moon.png";
+
+#[derive(Resource)]
+pub(crate) struct SkyCubemap {
+    image: Handle<Image>,
+    configured: bool,
+}
 
 #[derive(Resource)]
 pub(crate) struct DayNightCycle {
@@ -26,18 +33,8 @@ impl Default for DayNightCycle {
     }
 }
 
-#[derive(Resource)]
-pub(crate) struct SkyMaterials {
-    side: Handle<StandardMaterial>,
-    top: Handle<StandardMaterial>,
-    bottom: Handle<StandardMaterial>,
-}
-
 #[derive(Component)]
 pub(crate) struct SkyRoot;
-
-#[derive(Component)]
-struct SkyFace;
 
 #[derive(Component, Clone, Copy)]
 pub(crate) enum CelestialBody {
@@ -68,6 +65,10 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 
 fn horizon_fade(elevation: f32) -> f32 {
     smoothstep(-0.04, 0.06, elevation)
+}
+
+fn sky_brightness(twilight: f32) -> f32 {
+    DAY_SKY_BRIGHTNESS + (NIGHT_SKY_BRIGHTNESS - DAY_SKY_BRIGHTNESS) * twilight * 0.9
 }
 
 /// World-space rotation for a directional light shining from `sun_dir` (ground → sun).
@@ -135,69 +136,14 @@ pub(crate) fn spawn_sky(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let side_texture = asset_server.load(SIDE_TEXTURE);
-    let top_texture = asset_server.load(TOP_TEXTURE);
-    let bottom_texture = asset_server.load(BOTTOM_TEXTURE);
+    let cubemap = asset_server.load(SKY_CUBEMAP);
+    commands.insert_resource(SkyCubemap {
+        image: cubemap,
+        configured: false,
+    });
+
     let sun_texture = asset_server.load(SUN_TEXTURE);
     let moon_texture = asset_server.load(MOON_TEXTURE);
-
-    let side_material = materials.add(StandardMaterial {
-        base_color_texture: Some(side_texture),
-        base_color: Color::WHITE,
-        unlit: true,
-        ..default()
-    });
-    let top_material = materials.add(StandardMaterial {
-        base_color_texture: Some(top_texture),
-        base_color: Color::WHITE,
-        unlit: true,
-        ..default()
-    });
-    let bottom_material = materials.add(StandardMaterial {
-        base_color_texture: Some(bottom_texture),
-        base_color: Color::WHITE,
-        unlit: true,
-        ..default()
-    });
-
-    commands.insert_resource(SkyMaterials {
-        side: side_material.clone(),
-        top: top_material.clone(),
-        bottom: bottom_material.clone(),
-    });
-
-    let half = SKY_HALF_EXTENT;
-    let plane_half = Vec2::splat(half);
-
-    let sky_root = commands
-        .spawn((
-            WorldScene,
-            SkyRoot,
-            Transform::default(),
-            Visibility::default(),
-            Name::new("SkyRoot"),
-        ))
-        .id();
-
-    let faces = [
-        (Vec3::new(half, 0.0, 0.0), Vec3::NEG_X, side_material.clone()),
-        (Vec3::new(-half, 0.0, 0.0), Vec3::X, side_material.clone()),
-        (Vec3::new(0.0, 0.0, half), Vec3::NEG_Z, side_material.clone()),
-        (Vec3::new(0.0, 0.0, -half), Vec3::Z, side_material),
-        (Vec3::new(0.0, half, 0.0), Vec3::NEG_Y, top_material),
-        (Vec3::new(0.0, -half, 0.0), Vec3::Y, bottom_material),
-    ];
-
-    for (position, normal, material) in faces {
-        commands.entity(sky_root).with_children(|parent| {
-            parent.spawn((
-                SkyFace,
-                Mesh3d(meshes.add(Plane3d::new(normal, plane_half))),
-                MeshMaterial3d(material),
-                Transform::from_translation(position),
-            ));
-        });
-    }
 
     let sun_material = materials.add(StandardMaterial {
         base_color_texture: Some(sun_texture),
@@ -219,24 +165,82 @@ pub(crate) fn spawn_sky(
     let celestial_half = Vec2::splat(CELESTIAL_SIZE * 0.5);
     let celestial_mesh = meshes.add(Plane3d::new(Vec3::Z, celestial_half));
 
-    commands.entity(sky_root).with_children(|parent| {
-        parent.spawn((
-            CelestialBody::Sun,
-            Mesh3d(celestial_mesh.clone()),
-            MeshMaterial3d(sun_material),
+    commands
+        .spawn((
+            WorldScene,
+            SkyRoot,
             Transform::default(),
-            Visibility::Visible,
-            Name::new("SunSprite"),
-        ));
-        parent.spawn((
-            CelestialBody::Moon,
-            Mesh3d(celestial_mesh),
-            MeshMaterial3d(moon_material),
-            Transform::default(),
-            Visibility::Visible,
-            Name::new("MoonSprite"),
-        ));
-    });
+            Visibility::default(),
+            Name::new("SkyRoot"),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                CelestialBody::Sun,
+                Mesh3d(celestial_mesh.clone()),
+                MeshMaterial3d(sun_material),
+                Transform::default(),
+                Visibility::Visible,
+                Name::new("SunSprite"),
+            ));
+            parent.spawn((
+                CelestialBody::Moon,
+                Mesh3d(celestial_mesh),
+                MeshMaterial3d(moon_material),
+                Transform::default(),
+                Visibility::Visible,
+                Name::new("MoonSprite"),
+            ));
+        });
+}
+
+pub(crate) fn configure_sky_cubemap(
+    mut cubemap: ResMut<SkyCubemap>,
+    asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+    mut cameras: Query<(Entity, Option<&mut Skybox>), With<PlayerCamera>>,
+    mut commands: Commands,
+) {
+    if cubemap.configured {
+        return;
+    }
+
+    if !asset_server.is_loaded_with_dependencies(&cubemap.image) {
+        return;
+    }
+
+    let Some(image) = images.get_mut(&cubemap.image) else {
+        return;
+    };
+
+    if image.texture_descriptor.array_layer_count() == 1 {
+        image
+            .reinterpret_stacked_2d_as_array(image.height() / image.width())
+            .expect("sky cubemap should be a vertical stack of square faces");
+        image.texture_view_descriptor = Some(TextureViewDescriptor {
+            dimension: Some(TextureViewDimension::Cube),
+            ..default()
+        });
+    }
+
+    let brightness = sky_brightness(0.0);
+
+    for (entity, existing) in &mut cameras {
+        match existing {
+            Some(mut skybox) => {
+                skybox.image = cubemap.image.clone();
+                skybox.brightness = brightness;
+            }
+            None => {
+                commands.entity(entity).insert(Skybox {
+                    image: cubemap.image.clone(),
+                    brightness,
+                    ..default()
+                });
+            }
+        }
+    }
+
+    cubemap.configured = true;
 }
 
 pub(crate) fn follow_sky_to_camera(
@@ -279,8 +283,6 @@ pub(crate) fn update_day_night(
     time: Res<Time>,
     settings: Res<PlayerSettings>,
     mut cycle: ResMut<DayNightCycle>,
-    sky_materials: Option<Res<SkyMaterials>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sun_lights: Query<
         (&mut DirectionalLight, &mut Transform),
@@ -290,6 +292,7 @@ pub(crate) fn update_day_night(
         (&CelestialBody, &mut Transform, &mut Visibility),
         Without<SunLight>,
     >,
+    mut skyboxes: Query<&mut Skybox, With<PlayerCamera>>,
 ) {
     cycle.phase = (cycle.phase + time.delta_secs() / DAY_LENGTH_SECS) % 1.0;
 
@@ -298,27 +301,8 @@ pub(crate) fn update_day_night(
     let daylight = sun_dir.y.clamp(0.0, 1.0);
     let twilight = 1.0 - smoothstep(0.0, 0.12, sun_dir.y);
 
-    if let Some(sky_materials) = sky_materials {
-        let night_tint = Color::srgb(0.3, 0.38, 0.58);
-        let side_color = Color::WHITE.mix(&night_tint, twilight * 0.85);
-        let top_color = Color::srgb(0.86, 0.93, 1.0).mix(
-            &Color::srgb(0.04, 0.06, 0.16),
-            twilight * 0.95,
-        );
-        let bottom_color = Color::srgb(0.72, 0.86, 1.0).mix(
-            &Color::srgb(0.02, 0.04, 0.1),
-            twilight * 0.9,
-        );
-
-        for (handle, color) in [
-            (&sky_materials.side, side_color),
-            (&sky_materials.top, top_color),
-            (&sky_materials.bottom, bottom_color),
-        ] {
-            if let Some(material) = materials.get_mut(handle) {
-                material.base_color = color;
-            }
-        }
+    for mut skybox in &mut skyboxes {
+        skybox.brightness = sky_brightness(twilight);
     }
 
     for (mut light, mut transform) in &mut sun_lights {
@@ -354,7 +338,10 @@ pub(crate) fn update_day_night(
     ambient.color = if daylight > 0.05 {
         Color::srgb(0.92, 0.94, 1.0)
     } else {
-        Color::srgb(0.45, 0.5, 0.75)
+        Color::srgb(0.45, 0.5, 0.75).mix(
+            &Color::srgb(0.3, 0.38, 0.58),
+            twilight * 0.35,
+        )
     };
 
     for (body, mut transform, mut visibility) in &mut celestial {
