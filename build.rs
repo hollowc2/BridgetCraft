@@ -67,7 +67,7 @@ fn main() {
 
 fn build_sky_cubemap(out_dir: &Path) {
     let other_dir = Path::new("assets/kenney_voxel-pack/PNG/Other");
-    let face_size = 512u32;
+    let face_size = 256u32;
     let faces = [
         other_dir.join("skybox_sideClouds.png"), // +X
         other_dir.join("skybox_sideClouds.png"), // -X

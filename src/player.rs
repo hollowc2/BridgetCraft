@@ -137,7 +137,7 @@ impl Default for PlayerSettings {
     }
 }
 
-pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Entity {
+pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> (Entity, Entity) {
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -145,6 +145,7 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
                 order: 0,
                 ..default()
             },
+            Msaa::Off,
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
@@ -152,7 +153,7 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
         ))
         .id();
 
-    commands
+    let player = commands
         .spawn((
             Player,
             PlayerController::new(),
@@ -161,7 +162,9 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
             Name::new(name.to_string()),
         ))
         .add_child(camera)
-        .id()
+        .id();
+
+    (player, camera)
 }
 
 pub fn grab_cursor(mut cursor: Single<&mut CursorOptions>) {

@@ -39,7 +39,7 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
-    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_camera, spawn_sky,
+    apply_shadow_settings, configure_sky_cubemap, spawn_celestial_bodies, spawn_sky,
     spawn_sun_and_ambient, update_day_night, DayNightCycle,
 };
 use world_gen::{ProceduralTerrain, WorldMetadata};
@@ -141,7 +141,6 @@ fn main() {
                 auto_save_system,
                 save_on_exit,
                 configure_sky_cubemap,
-                follow_sky_to_camera,
                 apply_shadow_settings,
                 update_day_night,
                 sync_diagnostics_overlay,
@@ -187,12 +186,13 @@ fn setup_world(
     materials: ResMut<Assets<StandardMaterial>>,
 ) {
     spawn_sun_and_ambient(&mut commands, &settings);
-    spawn_sky(&mut commands, asset_server, meshes, materials);
 
     let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
-    let player = spawn_player(&mut commands, &player_name, spawn);
+    let (player, camera) = spawn_player(&mut commands, &player_name, spawn);
+    spawn_celestial_bodies(&mut commands, camera, &asset_server, meshes, materials);
+    spawn_sky(&mut commands, &asset_server);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {
