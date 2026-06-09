@@ -44,6 +44,7 @@ fn landmark_origins(height_noise: &HybridMulti<Perlin>) -> LandmarkOrigins {
 }
 
 const TREE_RADIUS: i32 = 48;
+const TREE_LEAF_CLEARANCE: i32 = 6;
 
 /// Cached procedural terrain data. Rebuilt only when the world seed changes.
 #[derive(Resource)]
@@ -52,6 +53,52 @@ pub struct ProceduralTerrain {
     height_noise: Arc<HybridMulti<Perlin>>,
     height_cache: Arc<Mutex<HashMap<(i32, i32), i32>>>,
     lookup: Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync>,
+}
+
+fn build_tree_columns(
+    height_noise: &HybridMulti<Perlin>,
+    tree_noise: &Perlin,
+) -> HashMap<(i32, i32), i32> {
+    let mut columns = HashMap::new();
+    for x in -TREE_RADIUS..=TREE_RADIUS {
+        for z in -TREE_RADIUS..=TREE_RADIUS {
+            if x * x + z * z > TREE_RADIUS * TREE_RADIUS {
+                continue;
+            }
+
+            let density = tree_noise.get([x as f64 * 0.17, z as f64 * 0.17]);
+            if density < 0.62 {
+                continue;
+            }
+
+            columns.insert((x, z), terrain_surface_height_with(height_noise, x, z));
+        }
+    }
+    columns
+}
+
+fn near_landmark(pos: IVec3, origins: LandmarkOrigins) -> bool {
+    let checks = [
+        (origins.pyramid, 12, 10),
+        (origins.tower, 86, 5),
+        (origins.lighthouse, 29, 4),
+        (origins.bridge, 13, 14),
+        (origins.observatory, 22, 9),
+    ];
+
+    for (origin, max_y, horizontal) in checks {
+        let local = pos - origin;
+        if local.y >= -1 && local.y <= max_y && local.x.abs() <= horizontal && local.z.abs() <= horizontal
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn in_tree_region(pos: IVec3) -> bool {
+    pos.x * pos.x + pos.z * pos.z <= (TREE_RADIUS + 2) * (TREE_RADIUS + 2)
 }
 
 impl Default for ProceduralTerrain {
@@ -64,12 +111,18 @@ impl ProceduralTerrain {
     pub fn new(seed: u32) -> Self {
         let height_noise = Arc::new(build_height_noise(seed));
         let height_cache = Arc::new(Mutex::new(HashMap::new()));
-        let tree_noise = Arc::new(Perlin::new(seed.wrapping_add(77_007)));
+        let tree_noise = Perlin::new(seed.wrapping_add(77_007));
+        let tree_columns = build_tree_columns(&height_noise, &tree_noise);
         let landmarks = landmark_origins(&height_noise);
         let noise = height_noise.clone();
         let cache = height_cache.clone();
-        let trees = tree_noise.clone();
+        let voxel_cache = Arc::new(Mutex::new(HashMap::<IVec3, WorldVoxel<u8>>::new()));
+        let memo = voxel_cache.clone();
         let lookup = Arc::new(move |pos: IVec3| {
+            if let Some(voxel) = memo.lock().unwrap().get(&pos) {
+                return *voxel;
+            }
+
             let height = {
                 let mut cache = cache.lock().unwrap();
                 match cache.get(&(pos.x, pos.z)) {
@@ -81,10 +134,22 @@ impl ProceduralTerrain {
                     }
                 }
             };
-            if let Some(voxel) = decoration_voxel_at(&noise, &trees, landmarks, pos) {
-                return voxel;
-            }
-            terrain_voxel_at(pos, height)
+
+            let voxel = if pos.y > height + TREE_LEAF_CLEARANCE {
+                WorldVoxel::Air
+            } else if pos.y < 0 {
+                WorldVoxel::Solid(BlockId::Stone.as_material())
+            } else if pos.y <= height + TREE_LEAF_CLEARANCE
+                && (in_tree_region(pos) || near_landmark(pos, landmarks))
+            {
+                decoration_voxel_at(landmarks, &tree_columns, pos, height)
+                    .unwrap_or_else(|| terrain_voxel_at(pos, height))
+            } else {
+                terrain_voxel_at(pos, height)
+            };
+
+            memo.lock().unwrap().insert(pos, voxel);
+            voxel
         });
 
         Self {
@@ -170,45 +235,41 @@ pub fn terrain_voxel_at(pos: IVec3, height: i32) -> WorldVoxel<u8> {
 }
 
 fn decoration_voxel_at(
-    height_noise: &HybridMulti<Perlin>,
-    tree_noise: &Perlin,
     landmarks: LandmarkOrigins,
+    tree_columns: &HashMap<(i32, i32), i32>,
     pos: IVec3,
+    surface_height: i32,
 ) -> Option<WorldVoxel<u8>> {
-    if let Some(block) = landmark_voxel_at(landmarks, pos) {
-        return Some(block.to_world_voxel());
+    if near_landmark(pos, landmarks) {
+        if let Some(block) = landmark_voxel_at(landmarks, pos) {
+            return Some(block.to_world_voxel());
+        }
     }
-    tree_voxel_at(height_noise, tree_noise, pos).map(|block| block.to_world_voxel())
+
+    if pos.y <= surface_height + TREE_LEAF_CLEARANCE {
+        tree_voxel_at(tree_columns, pos).map(|block| block.to_world_voxel())
+    } else {
+        None
+    }
 }
 
-fn tree_voxel_at(
-    height_noise: &HybridMulti<Perlin>,
-    tree_noise: &Perlin,
-    pos: IVec3,
-) -> Option<BlockId> {
-    if pos.x * pos.x + pos.z * pos.z > (TREE_RADIUS + 2) * (TREE_RADIUS + 2) {
+fn tree_voxel_at(tree_columns: &HashMap<(i32, i32), i32>, pos: IVec3) -> Option<BlockId> {
+    if !in_tree_region(pos) {
         return None;
+    }
+
+    if let Some(&surface) = tree_columns.get(&(pos.x, pos.z)) {
+        let trunk_y = pos.y - surface;
+        if (1..=4).contains(&trunk_y) {
+            return Some(BlockId::Trunk);
+        }
     }
 
     for x in (pos.x - 2)..=(pos.x + 2) {
         for z in (pos.z - 2)..=(pos.z + 2) {
-            if x * x + z * z > TREE_RADIUS * TREE_RADIUS {
+            let Some(&surface) = tree_columns.get(&(x, z)) else {
                 continue;
-            }
-
-            let density = tree_noise.get([x as f64 * 0.17, z as f64 * 0.17]);
-            if density < 0.62 {
-                continue;
-            }
-
-            let surface = terrain_surface_height_with(height_noise, x, z);
-
-            if pos.x == x && pos.z == z {
-                let trunk_y = pos.y - surface;
-                if (1..=4).contains(&trunk_y) {
-                    return Some(BlockId::Trunk);
-                }
-            }
+            };
 
             let dx = pos.x - x;
             let dy = pos.y - surface;
