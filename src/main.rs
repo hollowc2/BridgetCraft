@@ -1,5 +1,6 @@
 mod audio;
 mod block;
+mod gamepad;
 mod interaction;
 mod net;
 mod player;
@@ -261,6 +262,10 @@ fn settings_ui(
             ui.add(
                 bevy_egui::egui::Slider::new(&mut settings.mouse_sensitivity, 0.0005..=0.01)
                     .text("Mouse sensitivity"),
+            );
+            ui.add(
+                bevy_egui::egui::Slider::new(&mut settings.gamepad_look_sensitivity, 0.5..=6.0)
+                    .text("Gamepad look sensitivity"),
             );
         });
 }

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::block::{BlockId, HotbarSelection, HOTBAR_SIZE};
+use crate::gamepad::select_primary;
 use crate::net::NetworkRole;
 use crate::player::PlayerSettings;
 use crate::AppState;
@@ -105,13 +106,14 @@ pub fn update_hotbar_text(selection: Res<HotbarSelection>, mut text: Single<&mut
         let end = if index == selection.index { ']' } else { ' ' };
         slots.push_str(&format!("{marker}{}{end} ", block.label()));
     }
-    text.0 = format!("{slots}\n(1-{HOTBAR_SIZE}) scroll to change");
+    text.0 = format!("{slots}\n(1-{HOTBAR_SIZE}) scroll or D-pad to change");
 }
 
 pub fn hotbar_scroll(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     mut selection: ResMut<HotbarSelection>,
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(&Name, &Gamepad)>,
 ) {
     for event in wheel.read() {
         if event.y > 0.0 {
@@ -135,6 +137,15 @@ pub fn hotbar_scroll(
     for (index, key) in number_keys.iter().enumerate() {
         if keys.just_pressed(*key) {
             selection.index = index;
+        }
+    }
+
+    if let Some(gamepad) = select_primary(gamepads.iter()) {
+        if gamepad.just_pressed(GamepadButton::DPadLeft) {
+            selection.index = (selection.index + HOTBAR_SIZE - 1) % HOTBAR_SIZE;
+        }
+        if gamepad.just_pressed(GamepadButton::DPadRight) {
+            selection.index = (selection.index + 1) % HOTBAR_SIZE;
         }
     }
 }
@@ -163,8 +174,13 @@ pub fn cleanup_hud(
     hud: Query<Entity, With<HudRoot>>,
     mut next_state: ResMut<NextState<AppState>>,
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(&Name, &Gamepad)>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
+    let pause_pressed = keys.just_pressed(KeyCode::Escape)
+        || select_primary(gamepads.iter())
+            .is_some_and(|gamepad| gamepad.just_pressed(GamepadButton::Start));
+
+    if pause_pressed {
         for entity in &hud {
             commands.entity(entity).despawn();
         }

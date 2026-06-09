@@ -4,6 +4,7 @@ use bevy_voxel_world::prelude::*;
 
 use crate::audio::{voxel_block_at, GameAudio};
 use crate::block::HotbarSelection;
+use crate::gamepad::select_primary;
 use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};
@@ -49,8 +50,25 @@ pub fn update_block_target(
     let _ = buttons;
 }
 
+fn break_pressed(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) -> bool {
+    buttons.just_pressed(MouseButton::Left)
+        || gamepad.is_some_and(|gamepad| {
+            gamepad.just_pressed(GamepadButton::West)
+                || gamepad.just_pressed(GamepadButton::RightTrigger2)
+        })
+}
+
+fn place_pressed(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) -> bool {
+    buttons.just_pressed(MouseButton::Right)
+        || gamepad.is_some_and(|gamepad| {
+            gamepad.just_pressed(GamepadButton::East)
+                || gamepad.just_pressed(GamepadButton::LeftTrigger2)
+        })
+}
+
 pub fn handle_block_interaction(
     buttons: Res<ButtonInput<MouseButton>>,
+    gamepads: Query<(&Name, &Gamepad)>,
     selection: Res<HotbarSelection>,
     target: Single<&BlockTarget>,
     mut voxel_world: VoxelWorld<BridgetWorld>,
@@ -60,8 +78,10 @@ pub fn handle_block_interaction(
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
+    let gamepad = select_primary(gamepads.iter());
+
     if role.is_client() {
-        if buttons.just_pressed(MouseButton::Left) {
+        if break_pressed(&buttons, gamepad) {
             if let Some(pos) = target.hit_pos {
                 commands.client_trigger(BlockEditRequest {
                     pos,
@@ -69,7 +89,7 @@ pub fn handle_block_interaction(
                 });
             }
         }
-        if buttons.just_pressed(MouseButton::Right) {
+        if place_pressed(&buttons, gamepad) {
             if let Some(pos) = target.place_pos {
                 commands.client_trigger(BlockEditRequest {
                     pos,
@@ -80,7 +100,7 @@ pub fn handle_block_interaction(
         return;
     }
 
-    if buttons.just_pressed(MouseButton::Left) {
+    if break_pressed(&buttons, gamepad) {
         if let Some(pos) = target.hit_pos {
             if let Some(block) = voxel_block_at(&voxel_world, &metadata, pos) {
                 apply_block_edit(&mut voxel_world, &mut edits, pos, WorldVoxel::Air);
@@ -98,7 +118,7 @@ pub fn handle_block_interaction(
         }
     }
 
-    if buttons.just_pressed(MouseButton::Right) {
+    if place_pressed(&buttons, gamepad) {
         if let Some(pos) = target.place_pos {
             let block = selection.selected_block();
             let voxel = block.to_world_voxel();

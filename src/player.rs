@@ -5,6 +5,7 @@ use bevy_voxel_world::prelude::*;
 
 use crate::audio::{spatial_audio_listener, GameAudio};
 use crate::block::BlockId;
+use crate::gamepad::select_primary;
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::{terrain_surface_height, terrain_voxel_lookup};
 
@@ -15,6 +16,8 @@ pub const FLY_SPEED: f32 = 10.0;
 pub const JUMP_SPEED: f32 = 8.0;
 pub const GRAVITY: f32 = 22.0;
 pub const MOUSE_SENSITIVITY: f32 = 0.002;
+pub const GAMEPAD_LOOK_SENSITIVITY: f32 = 2.5;
+pub const GAMEPAD_MOVE_DEADZONE: f32 = 0.15;
 
 #[derive(Component)]
 pub struct Player;
@@ -45,6 +48,7 @@ impl PlayerController {
 #[derive(Resource)]
 pub struct PlayerSettings {
     pub mouse_sensitivity: f32,
+    pub gamepad_look_sensitivity: f32,
     pub render_distance: u32,
 }
 
@@ -52,6 +56,7 @@ impl Default for PlayerSettings {
     fn default() -> Self {
         Self {
             mouse_sensitivity: MOUSE_SENSITIVITY,
+            gamepad_look_sensitivity: GAMEPAD_LOOK_SENSITIVITY,
             render_distance: 6,
         }
     }
@@ -97,8 +102,10 @@ pub fn release_cursor(mut cursor: Query<&mut CursorOptions>) {
 }
 
 pub fn mouse_look(
+    time: Res<Time>,
     mut motion: MessageReader<MouseMotion>,
     settings: Res<PlayerSettings>,
+    gamepads: Query<(&Name, &Gamepad)>,
     mut players: Query<(&mut PlayerController, &Children), With<Player>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
@@ -106,6 +113,16 @@ pub fn mouse_look(
     for event in motion.read() {
         delta += event.delta;
     }
+
+    if let Some(gamepad) = select_primary(gamepads.iter()) {
+        let stick = gamepad.right_stick();
+        if stick.length() > GAMEPAD_MOVE_DEADZONE {
+            let look = stick * settings.gamepad_look_sensitivity * time.delta_secs();
+            delta.x += look.x * 60.0;
+            delta.y -= look.y * 60.0;
+        }
+    }
+
     if delta == Vec2::ZERO {
         return;
     }
@@ -129,6 +146,7 @@ pub fn mouse_look(
 pub fn player_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<(&Name, &Gamepad)>,
     metadata: Res<crate::world_gen::WorldMetadata>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
@@ -139,12 +157,18 @@ pub fn player_movement(
         return;
     };
 
+    let gamepad = select_primary(gamepads.iter());
+    let jump_pressed = keys.just_pressed(KeyCode::Space)
+        || gamepad.is_some_and(|gamepad| gamepad.just_pressed(GamepadButton::South));
+
     controller.fly_toggle_cooldown = (controller.fly_toggle_cooldown - time.delta_secs()).max(0.0);
 
-    if controller.fly_toggle_cooldown <= 0.0 && keys.just_pressed(KeyCode::Space) {
+    if controller.fly_toggle_cooldown <= 0.0 && jump_pressed {
         let now = time.elapsed_secs();
         // Double-tap detection via cooldown trick: if space pressed while still grounded recently
-        if keys.pressed(KeyCode::Space) && controller.grounded {
+        let jump_held = keys.pressed(KeyCode::Space)
+            || gamepad.is_some_and(|gamepad| gamepad.pressed(GamepadButton::South));
+        if jump_held && controller.grounded {
             controller.flying = !controller.flying;
             controller.fly_toggle_cooldown = 0.35;
             controller.velocity.y = 0.0;
@@ -169,6 +193,13 @@ pub fn player_movement(
         wish_dir += right;
     }
 
+    if let Some(gamepad) = gamepad {
+        let stick = gamepad.left_stick();
+        if stick.length() > GAMEPAD_MOVE_DEADZONE {
+            wish_dir += forward * -stick.y + right * stick.x;
+        }
+    }
+
     let chunk_get_voxel = voxel_world.get_voxel_fn();
     let procedural_get_voxel = terrain_voxel_lookup(metadata.seed);
     let get_voxel = std::sync::Arc::new(move |pos: IVec3| {
@@ -181,10 +212,17 @@ pub fn player_movement(
     });
 
     if controller.flying {
-        if keys.pressed(KeyCode::Space) {
+        if keys.pressed(KeyCode::Space)
+            || gamepad.is_some_and(|gamepad| gamepad.pressed(GamepadButton::South))
+        {
             wish_dir.y += 1.0;
         }
-        if keys.pressed(KeyCode::ShiftLeft) {
+        if keys.pressed(KeyCode::ShiftLeft)
+            || gamepad.is_some_and(|gamepad| {
+                gamepad.pressed(GamepadButton::LeftTrigger)
+                    || gamepad.pressed(GamepadButton::North)
+            })
+        {
             wish_dir.y -= 1.0;
         }
         if wish_dir != Vec3::ZERO {
@@ -206,7 +244,7 @@ pub fn player_movement(
         controller.velocity.z = 0.0;
     }
 
-    if controller.grounded && keys.just_pressed(KeyCode::Space) {
+    if controller.grounded && jump_pressed {
         controller.velocity.y = JUMP_SPEED;
         controller.grounded = false;
     }
