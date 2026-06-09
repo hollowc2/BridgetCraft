@@ -4,7 +4,6 @@ use crate::block::{BlockId, HotbarSelection, HOTBAR_SIZE};
 use crate::gamepad::select_primary;
 use crate::net::NetworkRole;
 use crate::player::PlayerSettings;
-use crate::AppState;
 
 #[derive(Component)]
 pub struct HudRoot;
@@ -167,23 +166,4 @@ pub fn update_network_info(
         lines.push(format!("Error: {err}"));
     }
     text.0 = lines.join("\n");
-}
-
-pub fn cleanup_hud(
-    mut commands: Commands,
-    hud: Query<Entity, With<HudRoot>>,
-    mut next_state: ResMut<NextState<AppState>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<(&Name, &Gamepad)>,
-) {
-    let pause_pressed = keys.just_pressed(KeyCode::Escape)
-        || select_primary(gamepads.iter())
-            .is_some_and(|gamepad| gamepad.just_pressed(GamepadButton::Start));
-
-    if pause_pressed {
-        for entity in &hud {
-            commands.entity(entity).despawn();
-        }
-        next_state.set(AppState::MainMenu);
-    }
 }

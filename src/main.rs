@@ -24,13 +24,15 @@ use player::{
     PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
-use ui::hud::{
-    cleanup_hud, hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info,
-};
+use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
 use ui::menu::{
     cleanup_menu, menu_button_interaction, menu_input_display, menu_input_focus,
     menu_input_keyboard, menu_input_unfocus, menu_player_name, spawn_main_menu, MenuFocus,
     MenuSettings,
+};
+use ui::game_menu::{
+    cleanup_world, game_menu_button_interaction, menu_closed, toggle_game_menu, GameMenuOpen,
+    WorldScene,
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use world_gen::{decorate_trees, WorldMetadata};
@@ -83,6 +85,7 @@ fn main() {
         .init_resource::<PlayerSettings>()
         .init_resource::<SaveTimer>()
         .init_resource::<DayNightCycle>()
+        .init_resource::<GameMenuOpen>()
         .add_systems(Startup, setup_ui_camera)
         .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
         .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
@@ -108,7 +111,11 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(OnExit(AppState::InGame), (cleanup_hud, release_cursor))
+        .add_systems(OnExit(AppState::InGame), (cleanup_world, release_cursor))
+        .add_systems(
+            Update,
+            (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
+        )
         .add_systems(
             Update,
             (
@@ -125,7 +132,7 @@ fn main() {
                 update_day_night,
                 settings_ui,
             )
-                .run_if(in_state(AppState::InGame)),
+                .run_if(in_state(AppState::InGame).and(menu_closed)),
         )
         .run();
 }
@@ -191,6 +198,7 @@ fn spawn_sun_and_ambient(commands: &mut Commands) {
     .build();
 
     commands.spawn((
+        WorldScene,
         DirectionalLight {
             illuminance: 18_000.0,
             shadows_enabled: true,
@@ -213,6 +221,7 @@ fn spawn_sky(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn((
+        WorldScene,
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.55, 0.75, 0.95),
