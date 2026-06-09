@@ -81,6 +81,7 @@ fn main() {
             OnEnter(AppState::InGame),
             (
                 grab_cursor,
+                sync_world_seed,
                 setup_world,
                 show_host_message,
             )
@@ -127,15 +128,12 @@ fn setup_ui_camera(mut commands: Commands) {
 fn setup_world(
     mut commands: Commands,
     metadata: Res<WorldMetadata>,
-    mut config: ResMut<BridgetWorld>,
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
     mut voxel_world: VoxelWorld<BridgetWorld>,
     meshes: ResMut<Assets<Mesh>>,
     materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    config.seed = metadata.seed;
-
     spawn_sun_and_ambient(&mut commands);
     spawn_sky(&mut commands, meshes, materials);
 
