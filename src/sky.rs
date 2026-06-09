@@ -3,7 +3,7 @@ use bevy::core_pipeline::Skybox;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
-use crate::player::{PlayerCamera, PlayerSettings, ShadowQuality};
+use crate::player::{Player, PlayerCamera, PlayerController, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
 const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
@@ -263,7 +263,7 @@ pub(crate) fn update_day_night(
     settings: Res<PlayerSettings>,
     mut cycle: ResMut<DayNightCycle>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    camera: Query<&Transform, With<PlayerCamera>>,
+    players: Query<&PlayerController, With<Player>>,
     mut sun_lights: Query<
         (&mut DirectionalLight, &mut Transform),
         (With<SunLight>, Without<CelestialBody>),
@@ -329,10 +329,11 @@ pub(crate) fn update_day_night(
         )
     };
 
-    let Ok(camera_transform) = camera.single() else {
+    let Ok(controller) = players.single() else {
         return;
     };
-    let camera_rotation = camera_transform.rotation;
+    let camera_rotation =
+        Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
 
     for (body, mut transform, mut visibility) in &mut celestial {
         let (direction, fade) = match body {
