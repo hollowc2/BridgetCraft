@@ -2,7 +2,7 @@ use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, V
 use bevy::prelude::*;
 
 use crate::block::BlockId;
-use crate::world_gen::{terrain_voxel_lookup, WorldMetadata};
+use crate::world_gen::ProceduralTerrain;
 use crate::voxel_config::BridgetWorld;
 use bevy_voxel_world::prelude::*;
 
@@ -101,10 +101,10 @@ impl GameAudio {
         &mut self,
         commands: &mut Commands,
         voxel_world: &VoxelWorld<BridgetWorld>,
-        metadata: &WorldMetadata,
+        terrain: &ProceduralTerrain,
         feet_position: Vec3,
     ) {
-        let surface = footstep_surface_at_feet(voxel_world, metadata, feet_position);
+        let surface = footstep_surface_at_feet(voxel_world, terrain, feet_position);
         self.play_footstep(commands, surface);
     }
 
@@ -185,14 +185,13 @@ impl GameAudio {
 
 pub fn voxel_block_at(
     voxel_world: &VoxelWorld<BridgetWorld>,
-    metadata: &WorldMetadata,
+    terrain: &ProceduralTerrain,
     pos: IVec3,
 ) -> Option<BlockId> {
     let chunk_get_voxel = voxel_world.get_voxel_fn();
-    let procedural_get_voxel = terrain_voxel_lookup(metadata.seed);
     let voxel = chunk_get_voxel(pos);
     let voxel = if voxel == WorldVoxel::Unset {
-        procedural_get_voxel(pos)
+        terrain.voxel_at(pos)
     } else {
         voxel
     };
@@ -205,11 +204,11 @@ pub fn voxel_block_at(
 
 fn footstep_surface_at_feet(
     voxel_world: &VoxelWorld<BridgetWorld>,
-    metadata: &WorldMetadata,
+    terrain: &ProceduralTerrain,
     feet_position: Vec3,
 ) -> FootstepSurface {
     let below = (feet_position + Vec3::new(0.0, -0.1, 0.0)).floor().as_ivec3();
-    voxel_block_at(voxel_world, metadata, below)
+    voxel_block_at(voxel_world, terrain, below)
         .map(footstep_surface_for_block)
         .unwrap_or(FootstepSurface::Grass)
 }

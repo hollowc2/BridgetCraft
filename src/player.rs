@@ -7,7 +7,7 @@ use crate::audio::{spatial_audio_listener, GameAudio};
 use crate::block::BlockId;
 use crate::gamepad::select_primary;
 use crate::voxel_config::BridgetWorld;
-use crate::world_gen::{terrain_surface_height, terrain_voxel_lookup};
+use crate::world_gen::ProceduralTerrain;
 
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const PLAYER_RADIUS: f32 = 0.35;
@@ -55,6 +55,14 @@ pub enum GravityMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum ShadowQuality {
+    Off,
+    Low,
+    #[default]
+    High,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum FlyActivation {
     #[default]
     Off,
@@ -80,6 +88,18 @@ impl GravityMode {
     }
 }
 
+impl ShadowQuality {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Low, Self::High];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Low => "Low",
+            Self::High => "High",
+        }
+    }
+}
+
 impl FlyActivation {
     pub const ALL: [Self; 3] = [Self::Off, Self::Always, Self::DoubleTap];
 
@@ -97,6 +117,8 @@ pub struct PlayerSettings {
     pub mouse_sensitivity: f32,
     pub gamepad_look_sensitivity: f32,
     pub render_distance: u32,
+    pub shadow_quality: ShadowQuality,
+    pub show_diagnostics: bool,
     pub gravity_mode: GravityMode,
     pub fly_activation: FlyActivation,
 }
@@ -106,7 +128,9 @@ impl Default for PlayerSettings {
         Self {
             mouse_sensitivity: MOUSE_SENSITIVITY,
             gamepad_look_sensitivity: GAMEPAD_LOOK_SENSITIVITY,
-            render_distance: 6,
+            render_distance: 4,
+            shadow_quality: ShadowQuality::High,
+            show_diagnostics: false,
             gravity_mode: GravityMode::Normal,
             fly_activation: FlyActivation::Off,
         }
@@ -199,7 +223,7 @@ pub fn player_movement(
     settings: Res<PlayerSettings>,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
-    metadata: Res<crate::world_gen::WorldMetadata>,
+    terrain: Res<ProceduralTerrain>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
     mut audio: ResMut<GameAudio>,
@@ -251,7 +275,7 @@ pub fn player_movement(
     }
 
     let chunk_get_voxel = voxel_world.get_voxel_fn();
-    let procedural_get_voxel = terrain_voxel_lookup(metadata.seed);
+    let procedural_get_voxel = terrain.lookup();
     let get_voxel = std::sync::Arc::new(move |pos: IVec3| {
         let voxel = chunk_get_voxel(pos);
         if voxel == WorldVoxel::Unset {
@@ -282,7 +306,7 @@ pub fn player_movement(
             let delta = wish_dir.normalize() * FLY_SPEED * time.delta_secs();
             move_by_delta(&mut transform.translation, delta, &*get_voxel);
         }
-        recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
+        recover_if_below_surface(&mut transform, &terrain, &*get_voxel);
 
         if settings.fly_activation == FlyActivation::DoubleTap
             && is_grounded(transform.translation, &*get_voxel)
@@ -314,7 +338,7 @@ pub fn player_movement(
     let gravity = GRAVITY * settings.gravity_mode.multiplier();
     controller.velocity.y -= gravity * time.delta_secs();
     move_with_collision(&mut transform, &mut controller, get_voxel.clone(), time.delta_secs());
-    recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
+    recover_if_below_surface(&mut transform, &terrain, &*get_voxel);
 
     let moving = Vec2::new(controller.velocity.x, controller.velocity.z).length() > 0.5;
     if controller.grounded && moving {
@@ -323,7 +347,7 @@ pub fn player_movement(
             audio.play_footstep_at_feet(
                 &mut commands,
                 &voxel_world,
-                &metadata,
+                &terrain,
                 transform.translation,
             );
         }
@@ -355,12 +379,12 @@ fn move_by_delta(
 
 fn recover_if_below_surface(
     transform: &mut Transform,
-    seed: u32,
+    terrain: &ProceduralTerrain,
     get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized),
 ) {
     let x = transform.translation.x.floor() as i32;
     let z = transform.translation.z.floor() as i32;
-    let min_feet_y = terrain_surface_height(seed, x, z) as f32 + 1.0;
+    let min_feet_y = terrain.surface_height(x, z) as f32 + 1.0;
 
     if transform.translation.y >= min_feet_y && !collides(transform.translation, get_voxel) {
         return;
@@ -438,7 +462,7 @@ fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {
     }
 }
 
-pub fn find_spawn_position(seed: u32) -> Vec3 {
-    let height = terrain_surface_height(seed, 0, 0);
+pub fn find_spawn_position(terrain: &ProceduralTerrain) -> Vec3 {
+    let height = terrain.surface_height(0, 0);
     Vec3::new(0.5, height as f32 + 1.0, 0.5)
 }

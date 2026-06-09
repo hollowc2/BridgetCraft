@@ -1,29 +1,33 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy_voxel_world::prelude::*;
+use bevy_voxel_world::prelude::WorldVoxel;
 use serde::{Deserialize, Serialize};
 
 use crate::block::SavedVoxel;
-use crate::voxel_config::BridgetWorld;
-use crate::world_gen::{world_base_voxels, WorldMetadata};
+use crate::interaction::PendingBlockEdits;
+use crate::world_gen::WorldMetadata;
 
 const SAVE_INTERVAL_SECS: f32 = 30.0;
 
-#[derive(Resource, Default, Clone, Serialize, Deserialize)]
+#[derive(Resource, Default, Clone)]
 pub struct WorldEdits {
-    pub edits: Vec<(IVec3, SavedVoxel)>,
+    edits: HashMap<IVec3, SavedVoxel>,
 }
 
 impl WorldEdits {
     pub fn record(&mut self, pos: IVec3, voxel: SavedVoxel) {
-        if let Some(existing) = self.edits.iter_mut().find(|(p, _)| *p == pos) {
-            existing.1 = voxel;
-        } else {
-            self.edits.push((pos, voxel));
-        }
+        self.edits.insert(pos, voxel);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (IVec3, SavedVoxel)> + '_ {
+        self.edits.iter().map(|(pos, voxel)| (*pos, *voxel))
+    }
+
+    pub fn len(&self) -> usize {
+        self.edits.len()
     }
 }
 
@@ -53,7 +57,7 @@ fn sanitize_world_name(name: &str) -> String {
 pub fn load_world_edits(
     metadata: &WorldMetadata,
     edits: &mut WorldEdits,
-    voxel_world: &mut VoxelWorld<crate::voxel_config::BridgetWorld>,
+    pending: &mut PendingBlockEdits,
 ) {
     edits.edits.clear();
 
@@ -68,45 +72,26 @@ pub fn load_world_edits(
         return;
     };
 
-    edits.edits = save.edits.clone();
-    for (pos, voxel) in &save.edits {
-        voxel_world.set_voxel(*pos, voxel.to_world_voxel());
+    edits.edits = save.edits.into_iter().collect();
+    for (pos, voxel) in edits.iter() {
+        pending.queue(pos, voxel.to_world_voxel());
     }
-    info!("loaded {} edits for world '{}'", save.edits.len(), metadata.name);
-}
-
-pub fn apply_world_base(
-    seed: u32,
-    voxel_world: &mut VoxelWorld<BridgetWorld>,
-) {
-    for (pos, voxel) in world_base_voxels(seed) {
-        voxel_world.set_voxel(pos, voxel);
-    }
+    info!("loaded {} edits for world '{}'", edits.len(), metadata.name);
 }
 
 pub fn revert_to_world_base(
     metadata: &WorldMetadata,
     edits: &mut WorldEdits,
-    voxel_world: &mut VoxelWorld<BridgetWorld>,
+    pending: &mut PendingBlockEdits,
     persist: bool,
 ) -> std::io::Result<()> {
-    let base = world_base_voxels(metadata.seed);
-    let mut affected = HashSet::new();
-    for (pos, _) in &edits.edits {
-        affected.insert(*pos);
-    }
-    for (pos, _) in &base {
-        affected.insert(*pos);
-    }
-
+    let affected: Vec<IVec3> = edits.edits.keys().copied().collect();
     edits.edits.clear();
 
     let affected_count = affected.len();
     for pos in affected {
-        voxel_world.set_voxel(pos, WorldVoxel::Unset);
+        pending.queue(pos, WorldVoxel::Unset);
     }
-
-    apply_world_base(metadata.seed, voxel_world);
 
     if persist {
         save_world(metadata, edits)?;
@@ -125,7 +110,7 @@ pub fn save_world(metadata: &WorldMetadata, edits: &WorldEdits) -> std::io::Resu
     fs::create_dir_all(&dir)?;
     let save = WorldSaveFile {
         metadata: metadata.clone(),
-        edits: edits.edits.clone(),
+        edits: edits.iter().collect(),
     };
     let json = serde_json::to_string_pretty(&save)?;
     fs::write(dir.join("world.json"), json)

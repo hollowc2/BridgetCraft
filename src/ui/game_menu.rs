@@ -2,9 +2,8 @@ use bevy::input::gamepad::GamepadButton;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_replicon::prelude::{SendTargets, ServerTriggerExt, ToClients};
-use bevy_voxel_world::prelude::VoxelWorld;
-
 use crate::audio::GameAudio;
+use crate::interaction::PendingBlockEdits;
 use crate::gamepad::select_primary;
 use crate::net::replicate::{RemotePlayerBody, WorldRevertBroadcast};
 use crate::net::NetworkRole;
@@ -72,7 +71,7 @@ pub fn game_menu_button_interaction(
     metadata: Res<WorldMetadata>,
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
-    mut voxel_world: VoxelWorld<BridgetWorld>,
+    mut pending: ResMut<PendingBlockEdits>,
     mut cursor: Query<&mut CursorOptions>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
@@ -102,7 +101,7 @@ pub fn game_menu_button_interaction(
                         } else if let Err(err) = revert_to_world_base(
                             &metadata,
                             &mut edits,
-                            &mut voxel_world,
+                            &mut pending,
                             true,
                         ) {
                             warn!("failed to restore original map: {err}");

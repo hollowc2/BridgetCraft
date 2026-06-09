@@ -1,7 +1,7 @@
 use bevy::color::Mix;
-use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
-use crate::player::PlayerCamera;
+use crate::player::{PlayerCamera, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
 const SKY_HALF_EXTENT: f32 = 512.0;
@@ -80,23 +80,39 @@ fn directional_light_rotation(sun_dir: Vec3) -> Quat {
     Quat::from_rotation_arc(Vec3::NEG_Z, -sun_dir)
 }
 
-pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands) {
-    let cascade_shadow_config = CascadeShadowConfigBuilder {
-        num_cascades: 4,
+fn cascade_shadow_config_for(quality: ShadowQuality) -> CascadeShadowConfig {
+    CascadeShadowConfigBuilder {
+        num_cascades: match quality {
+            ShadowQuality::Off | ShadowQuality::Low => 2,
+            ShadowQuality::High => 4,
+        },
         first_cascade_far_bound: 24.0,
         maximum_distance: 192.0,
         ..default()
     }
-    .build();
+    .build()
+}
 
-    commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
+fn shadow_map_size_for(quality: ShadowQuality) -> usize {
+    match quality {
+        ShadowQuality::Off | ShadowQuality::Low => 1024,
+        ShadowQuality::High => 2048,
+    }
+}
+
+pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands, settings: &PlayerSettings) {
+    let cascade_shadow_config = cascade_shadow_config_for(settings.shadow_quality);
+
+    commands.insert_resource(DirectionalLightShadowMap {
+        size: shadow_map_size_for(settings.shadow_quality),
+    });
 
     commands.spawn((
         WorldScene,
         SunLight,
         DirectionalLight {
             illuminance: 18_000.0,
-            shadows_enabled: true,
+            shadows_enabled: settings.shadow_quality != ShadowQuality::Off,
             // Voxel faces are axis-aligned; lower bias keeps shadows glued to blocks.
             shadow_depth_bias: 0.008,
             shadow_normal_bias: 0.6,
@@ -236,8 +252,32 @@ pub(crate) fn follow_sky_to_camera(
     sky_transform.translation = camera.translation();
 }
 
+pub(crate) fn apply_shadow_settings(
+    settings: Res<PlayerSettings>,
+    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+    mut sun_lights: Query<
+        (&mut DirectionalLight, &mut CascadeShadowConfig),
+        (With<SunLight>, Without<CelestialBody>),
+    >,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+
+    shadow_map.size = shadow_map_size_for(settings.shadow_quality);
+    let cascade_shadow_config = cascade_shadow_config_for(settings.shadow_quality);
+
+    for (mut light, mut cascade) in &mut sun_lights {
+        *cascade = cascade_shadow_config.clone();
+        if settings.shadow_quality == ShadowQuality::Off {
+            light.shadows_enabled = false;
+        }
+    }
+}
+
 pub(crate) fn update_day_night(
     time: Res<Time>,
+    settings: Res<PlayerSettings>,
     mut cycle: ResMut<DayNightCycle>,
     sky_materials: Option<Res<SkyMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -297,7 +337,8 @@ pub(crate) fn update_day_night(
             let elevation = sun_dir.y.clamp(0.0, 1.0);
             light.illuminance = 3_000.0 + elevation * 22_000.0;
             light.color = Color::srgb(1.0, 0.94 + elevation * 0.04, 0.82 + elevation * 0.1);
-            light.shadows_enabled = elevation > 0.08;
+            light.shadows_enabled =
+                settings.shadow_quality != ShadowQuality::Off && elevation > 0.08;
         } else if moon_dir.y > 0.0 {
             let elevation = moon_dir.y.clamp(0.0, 1.0);
             light.illuminance = 300.0 + elevation * 900.0;

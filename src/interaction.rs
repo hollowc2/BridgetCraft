@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientTriggerExt, ServerTriggerExt, ToClients, SendTargets};
 use bevy_voxel_world::prelude::*;
@@ -9,12 +11,25 @@ use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};
 use crate::voxel_config::BridgetWorld;
-use crate::world_gen::WorldMetadata;
+use crate::world_gen::ProceduralTerrain;
 
 #[derive(Component, Default)]
 pub struct BlockTarget {
     pub hit_pos: Option<IVec3>,
     pub place_pos: Option<IVec3>,
+}
+
+/// Queues voxel writes until `flush_pending_block_edits` runs once per frame.
+/// Coalesces duplicate positions (last write wins) before calling `set_voxel`.
+#[derive(Resource, Default)]
+pub struct PendingBlockEdits {
+    edits: HashMap<IVec3, WorldVoxel<u8>>,
+}
+
+impl PendingBlockEdits {
+    pub fn queue(&mut self, pos: IVec3, voxel: WorldVoxel<u8>) {
+        self.edits.insert(pos, voxel);
+    }
 }
 
 pub fn update_block_target(
@@ -71,10 +86,11 @@ pub fn handle_block_interaction(
     gamepads: Query<(&Name, &Gamepad)>,
     selection: Res<HotbarSelection>,
     target: Single<&BlockTarget>,
-    mut voxel_world: VoxelWorld<BridgetWorld>,
+    voxel_world: VoxelWorld<BridgetWorld>,
+    mut pending: ResMut<PendingBlockEdits>,
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
-    metadata: Res<WorldMetadata>,
+    terrain: Res<ProceduralTerrain>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
@@ -102,8 +118,8 @@ pub fn handle_block_interaction(
 
     if break_pressed(&buttons, gamepad) {
         if let Some(pos) = target.hit_pos {
-            if let Some(block) = voxel_block_at(&voxel_world, &metadata, pos) {
-                apply_block_edit(&mut voxel_world, &mut edits, pos, WorldVoxel::Air);
+            if let Some(block) = voxel_block_at(&voxel_world, &terrain, pos) {
+                apply_block_edit(&mut pending, &mut edits, pos, WorldVoxel::Air);
                 audio.play_block_break(&mut commands, block, pos);
                 if role.is_host() {
                     commands.server_trigger(ToClients {
@@ -122,7 +138,7 @@ pub fn handle_block_interaction(
         if let Some(pos) = target.place_pos {
             let block = selection.selected_block();
             let voxel = block.to_world_voxel();
-            apply_block_edit(&mut voxel_world, &mut edits, pos, voxel);
+            apply_block_edit(&mut pending, &mut edits, pos, voxel);
             audio.play_block_place(&mut commands, block, pos);
             if role.is_host() {
                 commands.server_trigger(ToClients {
@@ -140,13 +156,34 @@ pub fn handle_block_interaction(
 use crate::net::replicate::BlockEditBroadcast;
 
 pub fn apply_block_edit(
-    voxel_world: &mut VoxelWorld<BridgetWorld>,
+    pending: &mut PendingBlockEdits,
     edits: &mut WorldEdits,
     pos: IVec3,
     voxel: WorldVoxel<u8>,
 ) {
-    voxel_world.set_voxel(pos, voxel);
+    pending.queue(pos, voxel);
     record_edit(edits, pos, voxel);
+}
+
+pub fn apply_pending_to_world(
+    pending: &mut PendingBlockEdits,
+    voxel_world: &mut VoxelWorld<BridgetWorld>,
+) {
+    if pending.edits.is_empty() {
+        return;
+    }
+
+    for (pos, voxel) in pending.edits.drain() {
+        voxel_world.set_voxel(pos, voxel);
+    }
+}
+
+/// Applies all queued edits to the voxel world once per frame.
+pub fn flush_pending_block_edits(
+    mut pending: ResMut<PendingBlockEdits>,
+    mut voxel_world: VoxelWorld<BridgetWorld>,
+) {
+    apply_pending_to_world(&mut pending, &mut voxel_world);
 }
 
 use crate::block::SavedVoxel;

@@ -10,13 +10,17 @@ mod ui;
 mod voxel_config;
 mod world_gen;
 
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use bevy_voxel_world::prelude::*;
 
 use audio::GameAudioPlugin;
 use block::HotbarSelection;
-use interaction::{handle_block_interaction, update_block_target, BlockTarget};
+use interaction::{
+    apply_pending_to_world, flush_pending_block_edits, handle_block_interaction,
+    update_block_target, BlockTarget, PendingBlockEdits,
+};
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
@@ -34,8 +38,11 @@ use ui::game_menu::{
     cleanup_world, game_menu_button_interaction, menu_closed, toggle_game_menu, GameMenuOpen,
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
-use sky::{follow_sky_to_camera, spawn_sky, spawn_sun_and_ambient, update_day_night, DayNightCycle};
-use world_gen::WorldMetadata;
+use sky::{
+    apply_shadow_settings, follow_sky_to_camera, spawn_sky, spawn_sun_and_ambient,
+    update_day_night, DayNightCycle,
+};
+use world_gen::{ProceduralTerrain, WorldMetadata};
 
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum AppState {
@@ -57,12 +64,24 @@ fn main() {
             }),
         )
         .add_plugins(EguiPlugin::default())
+        .add_plugins(FpsOverlayPlugin {
+            config: FpsOverlayConfig {
+                enabled: false,
+                frame_time_graph_config: bevy::dev_tools::fps_overlay::FrameTimeGraphConfig {
+                    enabled: false,
+                    ..default()
+                },
+                ..default()
+            },
+        })
         .add_plugins(GameAudioPlugin)
         .add_plugins(VoxelConfigPlugin)
         .add_plugins(NetworkPlugin)
         .init_state::<AppState>()
         .init_resource::<WorldMetadata>()
+        .init_resource::<ProceduralTerrain>()
         .init_resource::<WorldEdits>()
+        .init_resource::<PendingBlockEdits>()
         .init_resource::<HotbarSelection>()
         .init_resource::<NetworkRole>()
         .init_resource::<MenuSettings>()
@@ -96,7 +115,10 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(OnExit(AppState::InGame), (cleanup_world, release_cursor))
+        .add_systems(
+            OnExit(AppState::InGame),
+            (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
+        )
         .add_systems(
             Update,
             (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
@@ -115,10 +137,16 @@ fn main() {
                 auto_save_system,
                 save_on_exit,
                 follow_sky_to_camera,
+                apply_shadow_settings,
                 update_day_night,
+                sync_diagnostics_overlay,
                 settings_ui,
             )
                 .run_if(in_state(AppState::InGame).and(menu_closed)),
+        )
+        .add_systems(
+            PostUpdate,
+            flush_pending_block_edits.run_if(in_state(AppState::InGame)),
         )
         .run();
 }
@@ -143,17 +171,20 @@ fn setup_world(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     metadata: Res<WorldMetadata>,
+    terrain: Res<ProceduralTerrain>,
     menu_settings: Res<MenuSettings>,
+    settings: Res<PlayerSettings>,
     mut edits: ResMut<WorldEdits>,
+    mut pending: ResMut<PendingBlockEdits>,
     role: Res<NetworkRole>,
     mut voxel_world: VoxelWorld<BridgetWorld>,
     meshes: ResMut<Assets<Mesh>>,
     materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    spawn_sun_and_ambient(&mut commands);
+    spawn_sun_and_ambient(&mut commands, &settings);
     spawn_sky(&mut commands, asset_server, meshes, materials);
 
-    let spawn = find_spawn_position(metadata.seed);
+    let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
     let player = spawn_player(&mut commands, &player_name, spawn);
@@ -167,8 +198,8 @@ fn setup_world(
     ));
 
     if !role.is_client() {
-        crate::save::apply_world_base(metadata.seed, &mut voxel_world);
-        load_world_edits(&metadata, &mut edits, &mut voxel_world);
+        load_world_edits(&metadata, &mut edits, &mut pending);
+        apply_pending_to_world(&mut pending, &mut voxel_world);
     }
 
     spawn_hud(&mut commands);
@@ -191,6 +222,17 @@ fn settings_ui(
                 bevy_egui::egui::Slider::new(&mut settings.render_distance, 3..=8)
                     .text("Render distance"),
             );
+            ui.horizontal(|ui| {
+                ui.label("Shadow quality:");
+                for quality in crate::player::ShadowQuality::ALL {
+                    ui.selectable_value(
+                        &mut settings.shadow_quality,
+                        quality,
+                        quality.label(),
+                    );
+                }
+            });
+            ui.checkbox(&mut settings.show_diagnostics, "Show FPS overlay");
             ui.add(
                 bevy_egui::egui::Slider::new(&mut settings.mouse_sensitivity, 0.0005..=0.01)
                     .text("Mouse sensitivity"),
@@ -220,4 +262,16 @@ fn settings_ui(
                 ui.label("Space rises, Shift descends.");
             }
         });
+}
+
+fn sync_diagnostics_overlay(
+    settings: Res<PlayerSettings>,
+    mut overlay: ResMut<FpsOverlayConfig>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+
+    overlay.enabled = settings.show_diagnostics;
+    overlay.frame_time_graph_config.enabled = settings.show_diagnostics;
 }

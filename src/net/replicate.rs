@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::{voxel_block_at, GameAudio};
 use crate::block::{BlockId, SavedVoxel};
-use crate::interaction::apply_block_edit;
+use crate::interaction::{apply_block_edit, PendingBlockEdits};
 use crate::player::Player;
 use crate::save::{revert_to_world_base, WorldEdits};
 use crate::voxel_config::BridgetWorld;
-use crate::world_gen::WorldMetadata;
+use crate::world_gen::{ProceduralTerrain, WorldMetadata};
 
 #[derive(Component, Serialize, Deserialize, Clone)]
 #[require(Replicated)]
@@ -69,12 +69,12 @@ impl Plugin for ReplicatePlugin {
 
 fn apply_remote_block_edit(
     request: On<FromClient<BlockEditRequest>>,
-    mut voxel_world: VoxelWorld<BridgetWorld>,
+    mut pending: ResMut<PendingBlockEdits>,
     mut edits: ResMut<WorldEdits>,
     mut commands: Commands,
 ) {
     apply_block_edit(
-        &mut voxel_world,
+        &mut pending,
         &mut edits,
         request.pos,
         request.voxel.to_world_voxel(),
@@ -90,10 +90,11 @@ fn apply_remote_block_edit(
 
 fn apply_block_edit_broadcast(
     broadcast: On<BlockEditBroadcast>,
-    mut voxel_world: VoxelWorld<BridgetWorld>,
+    voxel_world: VoxelWorld<BridgetWorld>,
+    mut pending: ResMut<PendingBlockEdits>,
     mut edits: ResMut<WorldEdits>,
     role: Res<crate::net::NetworkRole>,
-    metadata: Res<WorldMetadata>,
+    terrain: Res<ProceduralTerrain>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
@@ -103,19 +104,14 @@ fn apply_block_edit_broadcast(
 
     match broadcast.voxel {
         SavedVoxel::Air => {
-            if let Some(block) = voxel_block_at(&voxel_world, &metadata, broadcast.pos) {
-                apply_block_edit(
-                    &mut voxel_world,
-                    &mut edits,
-                    broadcast.pos,
-                    WorldVoxel::Air,
-                );
+            if let Some(block) = voxel_block_at(&voxel_world, &terrain, broadcast.pos) {
+                apply_block_edit(&mut pending, &mut edits, broadcast.pos, WorldVoxel::Air);
                 audio.play_block_break(&mut commands, block, broadcast.pos);
             }
         }
         SavedVoxel::Solid(material) => {
             apply_block_edit(
-                &mut voxel_world,
+                &mut pending,
                 &mut edits,
                 broadcast.pos,
                 broadcast.voxel.to_world_voxel(),
@@ -131,14 +127,14 @@ fn apply_world_revert_broadcast(
     _broadcast: On<WorldRevertBroadcast>,
     metadata: Res<WorldMetadata>,
     mut edits: ResMut<WorldEdits>,
-    mut voxel_world: VoxelWorld<BridgetWorld>,
+    mut pending: ResMut<PendingBlockEdits>,
     role: Res<crate::net::NetworkRole>,
 ) {
     if !role.is_client() {
         return;
     }
 
-    if let Err(err) = revert_to_world_base(&metadata, &mut edits, &mut voxel_world, false) {
+    if let Err(err) = revert_to_world_base(&metadata, &mut edits, &mut pending, false) {
         warn!("failed to apply restored map from host: {err}");
     }
 }
