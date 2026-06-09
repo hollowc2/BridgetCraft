@@ -1,5 +1,5 @@
 use bevy::color::Mix;
-use bevy::light::CascadeShadowConfigBuilder;
+use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 use crate::player::PlayerCamera;
 use crate::ui::game_menu::WorldScene;
@@ -70,12 +70,26 @@ fn horizon_fade(elevation: f32) -> f32 {
     smoothstep(-0.04, 0.06, elevation)
 }
 
+/// World-space rotation for a directional light shining from `sun_dir` (ground → sun).
+fn directional_light_rotation(sun_dir: Vec3) -> Quat {
+    let sun_dir = sun_dir.normalize_or_zero();
+    if sun_dir.length_squared() < f32::EPSILON {
+        return Quat::IDENTITY;
+    }
+    // Bevy directional lights shine along their forward axis (-Z).
+    Quat::from_rotation_arc(Vec3::NEG_Z, -sun_dir)
+}
+
 pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands) {
     let cascade_shadow_config = CascadeShadowConfigBuilder {
-        maximum_distance: 256.0,
+        num_cascades: 4,
+        first_cascade_far_bound: 24.0,
+        maximum_distance: 192.0,
         ..default()
     }
     .build();
+
+    commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
 
     commands.spawn((
         WorldScene,
@@ -83,15 +97,18 @@ pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands) {
         DirectionalLight {
             illuminance: 18_000.0,
             shadows_enabled: true,
+            // Voxel faces are axis-aligned; lower bias keeps shadows glued to blocks.
+            shadow_depth_bias: 0.008,
+            shadow_normal_bias: 0.6,
             ..default()
         },
-        Transform::default(),
+        Transform::from_rotation(directional_light_rotation(sun_direction(0.2))),
         cascade_shadow_config,
         Name::new("Sun"),
     ));
 
     commands.insert_resource(GlobalAmbientLight {
-        brightness: 250.0,
+        brightness: 180.0,
         ..default()
     });
 }
@@ -273,8 +290,8 @@ pub(crate) fn update_day_night(
             Vec3::Y
         };
 
-        *transform = Transform::from_translation(active_dir * 200.0)
-            .looking_at(Vec3::ZERO, Vec3::Y);
+        transform.rotation = directional_light_rotation(active_dir);
+        transform.translation = Vec3::ZERO;
 
         if sun_dir.y > 0.0 {
             let elevation = sun_dir.y.clamp(0.0, 1.0);
@@ -292,7 +309,7 @@ pub(crate) fn update_day_night(
         }
     }
 
-    ambient.brightness = 40.0 + daylight * 240.0 + (1.0 - daylight) * moon_dir.y.max(0.0) * 80.0;
+    ambient.brightness = 30.0 + daylight * 170.0 + (1.0 - daylight) * moon_dir.y.max(0.0) * 60.0;
     ambient.color = if daylight > 0.05 {
         Color::srgb(0.92, 0.94, 1.0)
     } else {
