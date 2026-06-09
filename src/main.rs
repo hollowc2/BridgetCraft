@@ -121,6 +121,10 @@ fn main() {
         )
         .add_systems(
             Update,
+            toggle_performance_overlay,
+        )
+        .add_systems(
+            Update,
             (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
@@ -232,7 +236,10 @@ fn settings_ui(
                     );
                 }
             });
-            ui.checkbox(&mut settings.show_diagnostics, "Show FPS overlay");
+            ui.checkbox(
+                &mut settings.show_diagnostics,
+                "Show FPS overlay (F1)",
+            );
             ui.add(
                 bevy_egui::egui::Slider::new(&mut settings.mouse_sensitivity, 0.0005..=0.01)
                     .text("Mouse sensitivity"),
@@ -262,6 +269,21 @@ fn settings_ui(
                 ui.label("Space rises, Shift descends.");
             }
         });
+}
+
+fn toggle_performance_overlay(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<PlayerSettings>,
+    mut overlay: ResMut<FpsOverlayConfig>,
+) {
+    if !keys.just_pressed(KeyCode::F1) {
+        return;
+    }
+
+    settings.show_diagnostics = !settings.show_diagnostics;
+    let enabled = settings.show_diagnostics;
+    overlay.enabled = enabled;
+    overlay.frame_time_graph_config.enabled = enabled;
 }
 
 fn sync_diagnostics_overlay(
