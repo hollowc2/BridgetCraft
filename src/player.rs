@@ -439,19 +439,6 @@ fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {
 }
 
 pub fn find_spawn_position(seed: u32) -> Vec3 {
-    let mut best = (0, 0, terrain_surface_height(seed, 0, 0));
-    for z in -8..=8 {
-        for x in -8..=8 {
-            let height = terrain_surface_height(seed, x, z);
-            if height >= best.2 {
-                best = (x, z, height);
-            }
-        }
-    }
-
-    Vec3::new(
-        best.0 as f32 + 0.5,
-        best.2 as f32 + 1.0,
-        best.1 as f32 + 0.5,
-    )
+    let height = terrain_surface_height(seed, 0, 0);
+    Vec3::new(0.5, height as f32 + 1.0, 0.5)
 }

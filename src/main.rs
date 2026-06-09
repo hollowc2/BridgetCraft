@@ -35,7 +35,7 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{follow_sky_to_camera, spawn_sky, spawn_sun_and_ambient, update_day_night, DayNightCycle};
-use world_gen::{decorate_trees, WorldMetadata};
+use world_gen::WorldMetadata;
 
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
 pub enum AppState {
@@ -167,9 +167,7 @@ fn setup_world(
     ));
 
     if !role.is_client() {
-        for (pos, voxel) in decorate_trees(metadata.seed, IVec3::ZERO, 48) {
-            voxel_world.set_voxel(pos, voxel);
-        }
+        crate::save::apply_world_base(metadata.seed, &mut voxel_world);
         load_world_edits(&metadata, &mut edits, &mut voxel_world);
     }
 

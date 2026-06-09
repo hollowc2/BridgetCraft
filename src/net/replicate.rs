@@ -7,7 +7,7 @@ use crate::audio::{voxel_block_at, GameAudio};
 use crate::block::{BlockId, SavedVoxel};
 use crate::interaction::apply_block_edit;
 use crate::player::Player;
-use crate::save::WorldEdits;
+use crate::save::{revert_to_world_base, WorldEdits};
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::WorldMetadata;
 
@@ -40,6 +40,9 @@ pub struct BlockEditBroadcast {
     pub voxel: SavedVoxel,
 }
 
+#[derive(Event, Serialize, Deserialize, Clone, Copy)]
+pub struct WorldRevertBroadcast;
+
 pub struct ReplicatePlugin;
 
 impl Plugin for ReplicatePlugin {
@@ -48,8 +51,10 @@ impl Plugin for ReplicatePlugin {
             .replicate::<NetworkTransform>()
             .add_client_event::<BlockEditRequest>(Channel::Unordered)
             .add_server_event::<BlockEditBroadcast>(Channel::Unordered)
+            .add_server_event::<WorldRevertBroadcast>(Channel::Unordered)
             .add_observer(apply_remote_block_edit)
             .add_observer(apply_block_edit_broadcast)
+            .add_observer(apply_world_revert_broadcast)
             .add_observer(spawn_remote_player_visual)
             .add_systems(
                 Update,
@@ -119,6 +124,22 @@ fn apply_block_edit_broadcast(
                 audio.play_block_place(&mut commands, block, broadcast.pos);
             }
         }
+    }
+}
+
+fn apply_world_revert_broadcast(
+    _broadcast: On<WorldRevertBroadcast>,
+    metadata: Res<WorldMetadata>,
+    mut edits: ResMut<WorldEdits>,
+    mut voxel_world: VoxelWorld<BridgetWorld>,
+    role: Res<crate::net::NetworkRole>,
+) {
+    if !role.is_client() {
+        return;
+    }
+
+    if let Err(err) = revert_to_world_base(&metadata, &mut edits, &mut voxel_world, false) {
+        warn!("failed to apply restored map from host: {err}");
     }
 }
 

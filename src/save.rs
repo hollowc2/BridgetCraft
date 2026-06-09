@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -6,7 +7,8 @@ use bevy_voxel_world::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::block::SavedVoxel;
-use crate::world_gen::WorldMetadata;
+use crate::voxel_config::BridgetWorld;
+use crate::world_gen::{world_base_voxels, WorldMetadata};
 
 const SAVE_INTERVAL_SECS: f32 = 30.0;
 
@@ -71,6 +73,51 @@ pub fn load_world_edits(
         voxel_world.set_voxel(*pos, voxel.to_world_voxel());
     }
     info!("loaded {} edits for world '{}'", save.edits.len(), metadata.name);
+}
+
+pub fn apply_world_base(
+    seed: u32,
+    voxel_world: &mut VoxelWorld<BridgetWorld>,
+) {
+    for (pos, voxel) in world_base_voxels(seed) {
+        voxel_world.set_voxel(pos, voxel);
+    }
+}
+
+pub fn revert_to_world_base(
+    metadata: &WorldMetadata,
+    edits: &mut WorldEdits,
+    voxel_world: &mut VoxelWorld<BridgetWorld>,
+    persist: bool,
+) -> std::io::Result<()> {
+    let base = world_base_voxels(metadata.seed);
+    let mut affected = HashSet::new();
+    for (pos, _) in &edits.edits {
+        affected.insert(*pos);
+    }
+    for (pos, _) in &base {
+        affected.insert(*pos);
+    }
+
+    edits.edits.clear();
+
+    let affected_count = affected.len();
+    for pos in affected {
+        voxel_world.set_voxel(pos, WorldVoxel::Unset);
+    }
+
+    apply_world_base(metadata.seed, voxel_world);
+
+    if persist {
+        save_world(metadata, edits)?;
+    }
+
+    info!(
+        "restored original base map for world '{}' ({} affected voxels)",
+        metadata.name,
+        affected_count
+    );
+    Ok(())
 }
 
 pub fn save_world(metadata: &WorldMetadata, edits: &WorldEdits) -> std::io::Result<()> {
