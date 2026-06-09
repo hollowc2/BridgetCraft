@@ -127,7 +127,7 @@ impl BlockId {
     }
 
     pub fn is_solid(self) -> bool {
-        !matches!(self, BlockId::Water | BlockId::Glass)
+        !matches!(self, BlockId::Water)
     }
 
     pub fn texture_indices(self) -> [u32; 3] {
