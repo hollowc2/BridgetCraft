@@ -73,6 +73,7 @@ fn main() {
         .init_resource::<PlayerSettings>()
         .init_resource::<SaveTimer>()
         .init_resource::<DayNightCycle>()
+        .add_systems(Startup, setup_ui_camera)
         .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
         .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
         .add_systems(Update, menu_button_interaction.run_if(in_state(AppState::MainMenu)))
@@ -105,6 +106,22 @@ fn main() {
                 .run_if(in_state(AppState::InGame)),
         )
         .run();
+}
+
+#[derive(Component)]
+struct UiCamera;
+
+fn setup_ui_camera(mut commands: Commands) {
+    commands.spawn((
+        UiCamera,
+        Camera2d,
+        IsDefaultUiCamera,
+        Camera {
+            order: 10,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+    ));
 }
 
 fn setup_world(

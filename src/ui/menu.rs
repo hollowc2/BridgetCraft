@@ -8,6 +8,9 @@ use crate::AppState;
 pub struct MenuRoot;
 
 #[derive(Component)]
+pub struct MenuSceneCamera;
+
+#[derive(Component)]
 pub struct MenuButton(&'static str);
 
 #[derive(Component)]
@@ -20,6 +23,15 @@ pub struct JoinAddressInput;
 pub struct PlayerNameInput;
 
 pub fn spawn_main_menu(mut commands: Commands) {
+    commands.spawn((
+        MenuSceneCamera,
+        Camera2d,
+        Camera {
+            order: 0,
+            ..default()
+        },
+    ));
+
     commands
         .spawn((
             MenuRoot,
@@ -151,8 +163,15 @@ pub fn menu_button_interaction(
     }
 }
 
-pub fn cleanup_menu(mut commands: Commands, menu: Query<Entity, With<MenuRoot>>) {
+pub fn cleanup_menu(
+    mut commands: Commands,
+    menu: Query<Entity, With<MenuRoot>>,
+    cameras: Query<Entity, With<MenuSceneCamera>>,
+) {
     for entity in &menu {
+        commands.entity(entity).despawn();
+    }
+    for entity in &cameras {
         commands.entity(entity).despawn();
     }
 }

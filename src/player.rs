@@ -49,6 +49,10 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
     let camera = commands
         .spawn((
             Camera3d::default(),
+            Camera {
+                order: 0,
+                ..default()
+            },
             PlayerCamera,
             VoxelWorldCamera::<BridgetWorld>::default(),
             Transform::from_xyz(0.0, PLAYER_HEIGHT - 0.2, 0.0),
