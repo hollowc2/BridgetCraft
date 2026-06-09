@@ -1,0 +1,178 @@
+use bevy::prelude::*;
+use bevy_replicon::prelude::*;
+use bevy_voxel_world::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::block::SavedVoxel;
+use crate::interaction::apply_block_edit;
+use crate::player::Player;
+use crate::save::WorldEdits;
+use crate::voxel_config::BridgetWorld;
+
+#[derive(Component, Serialize, Deserialize, Clone)]
+#[require(Replicated)]
+pub struct NetworkPlayer {
+    pub name: String,
+    pub selected_block: u8,
+}
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Default)]
+#[require(Replicated)]
+pub struct NetworkTransform {
+    pub translation: [f32; 3],
+    pub yaw: f32,
+}
+
+#[derive(Component)]
+pub struct RemotePlayerBody;
+
+#[derive(Event, Serialize, Deserialize, Clone, Copy)]
+pub struct BlockEditRequest {
+    pub pos: IVec3,
+    pub voxel: SavedVoxel,
+}
+
+#[derive(Event, Serialize, Deserialize, Clone, Copy)]
+pub struct BlockEditBroadcast {
+    pub pos: IVec3,
+    pub voxel: SavedVoxel,
+}
+
+pub struct ReplicatePlugin;
+
+impl Plugin for ReplicatePlugin {
+    fn build(&self, app: &mut App) {
+        app.replicate::<NetworkPlayer>()
+            .replicate::<NetworkTransform>()
+            .add_client_event::<BlockEditRequest>(Channel::Unordered)
+            .add_server_event::<BlockEditBroadcast>(Channel::Unordered)
+            .add_observer(apply_remote_block_edit)
+            .add_observer(apply_block_edit_broadcast)
+            .add_observer(spawn_remote_player_visual)
+            .add_systems(
+                Update,
+                (
+                    sync_local_player_network_data,
+                    sync_network_transforms,
+                    tag_remote_players,
+                ),
+            );
+    }
+}
+
+fn apply_remote_block_edit(
+    request: On<FromClient<BlockEditRequest>>,
+    mut voxel_world: VoxelWorld<BridgetWorld>,
+    mut edits: ResMut<WorldEdits>,
+    mut commands: Commands,
+) {
+    apply_block_edit(
+        &mut voxel_world,
+        &mut edits,
+        request.pos,
+        request.voxel.to_world_voxel(),
+    );
+    commands.server_trigger(ToClients {
+        targets: SendTargets::CLIENTS_ONLY,
+        message: BlockEditBroadcast {
+            pos: request.pos,
+            voxel: request.voxel,
+        },
+    });
+}
+
+fn apply_block_edit_broadcast(
+    broadcast: On<BlockEditBroadcast>,
+    mut voxel_world: VoxelWorld<BridgetWorld>,
+    mut edits: ResMut<WorldEdits>,
+    role: Res<crate::net::NetworkRole>,
+) {
+    if role.is_client() {
+        apply_block_edit(
+            &mut voxel_world,
+            &mut edits,
+            broadcast.pos,
+            broadcast.voxel.to_world_voxel(),
+        );
+    }
+}
+
+fn spawn_remote_player_visual(
+    add: On<Add, RemotePlayerBody>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    players: Query<&NetworkPlayer>,
+    local: Query<(), With<Player>>,
+) {
+    if local.get(add.entity).is_ok() {
+        return;
+    }
+
+    let Ok(network_player) = players.get(add.entity) else {
+        return;
+    };
+
+    let body_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.72, 0.45, 0.32),
+        ..default()
+    });
+
+    commands.entity(add.entity).with_children(|parent| {
+        parent.spawn((
+            Mesh3d(meshes.add(Cuboid::new(0.7, 1.2, 0.45))),
+            MeshMaterial3d(body_material),
+            Transform::from_xyz(0.0, 0.6, 0.0),
+        ));
+        parent.spawn((
+            Mesh3d(meshes.add(Cuboid::new(0.45, 0.45, 0.45))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::srgb(0.95, 0.8, 0.65),
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 1.45, 0.0),
+        ));
+        parent.spawn((
+            Text2d::new(network_player.name.clone()),
+            TextFont {
+                font_size: 22.0,
+                ..default()
+            },
+            TextColor(Color::WHITE),
+            Transform::from_xyz(0.0, 2.2, 0.0),
+        ));
+    });
+}
+
+fn sync_local_player_network_data(
+    selection: Res<crate::block::HotbarSelection>,
+    mut players: Query<(&Name, &Transform, &mut NetworkPlayer, &mut NetworkTransform), With<Player>>,
+) {
+    for (name, transform, mut network_player, mut network_transform) in &mut players {
+        network_player.name = name.as_str().to_string();
+        network_player.selected_block = selection.selected_block().as_material();
+        network_transform.translation = transform.translation.to_array();
+        network_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+    }
+}
+
+fn tag_remote_players(
+    mut commands: Commands,
+    players: Query<Entity, (With<NetworkPlayer>, Without<Player>, Without<RemotePlayerBody>)>,
+) {
+    for entity in &players {
+        commands.entity(entity).insert(RemotePlayerBody);
+    }
+}
+
+fn sync_network_transforms(
+    mut remote: Query<
+        (&NetworkTransform, &mut Transform),
+        (With<RemotePlayerBody>, Without<Player>),
+    >,
+) {
+    for (network_transform, mut transform) in &mut remote {
+        transform.translation = Vec3::from_array(network_transform.translation);
+        transform.rotation = Quat::from_rotation_y(network_transform.yaw);
+    }
+}
