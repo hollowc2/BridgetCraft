@@ -225,8 +225,14 @@ pub(crate) fn update_day_night(
     sky_materials: Option<Res<SkyMaterials>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut sun_lights: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
-    mut celestial: Query<(&CelestialBody, &mut Transform, &mut Visibility)>,
+    mut sun_lights: Query<
+        (&mut DirectionalLight, &mut Transform),
+        (With<SunLight>, Without<CelestialBody>),
+    >,
+    mut celestial: Query<
+        (&CelestialBody, &mut Transform, &mut Visibility),
+        Without<SunLight>,
+    >,
 ) {
     cycle.phase = (cycle.phase + time.delta_secs() / DAY_LENGTH_SECS) % 1.0;
 
