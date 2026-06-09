@@ -137,7 +137,7 @@ fn setup_world(
     spawn_sun_and_ambient(&mut commands);
     spawn_sky(&mut commands, meshes, materials);
 
-    let spawn = find_spawn_position(&voxel_world);
+    let spawn = find_spawn_position(metadata.seed);
     let player_name = match &*role {
         NetworkRole::Host { .. } => "Host",
         NetworkRole::Client { .. } => "Guest",

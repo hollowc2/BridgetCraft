@@ -5,6 +5,7 @@ use bevy_voxel_world::prelude::*;
 
 use crate::block::BlockId;
 use crate::voxel_config::BridgetWorld;
+use crate::world_gen::{terrain_surface_height, terrain_voxel_lookup};
 
 pub const PLAYER_HEIGHT: f32 = 1.8;
 pub const PLAYER_RADIUS: f32 = 0.35;
@@ -116,6 +117,7 @@ pub fn mouse_look(
 pub fn player_movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    metadata: Res<crate::world_gen::WorldMetadata>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
 ) {
@@ -153,6 +155,17 @@ pub fn player_movement(
         wish_dir += right;
     }
 
+    let chunk_get_voxel = voxel_world.get_voxel_fn();
+    let procedural_get_voxel = terrain_voxel_lookup(metadata.seed);
+    let get_voxel = std::sync::Arc::new(move |pos: IVec3| {
+        let voxel = chunk_get_voxel(pos);
+        if voxel == WorldVoxel::Unset {
+            procedural_get_voxel(pos)
+        } else {
+            voxel
+        }
+    });
+
     if controller.flying {
         if keys.pressed(KeyCode::Space) {
             wish_dir.y += 1.0;
@@ -161,8 +174,12 @@ pub fn player_movement(
             wish_dir.y -= 1.0;
         }
         if wish_dir != Vec3::ZERO {
-            transform.translation += wish_dir.normalize() * FLY_SPEED * time.delta_secs();
+            let delta = wish_dir.normalize() * FLY_SPEED * time.delta_secs();
+            move_by_delta(&mut transform.translation, delta, &*get_voxel);
         }
+        recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
+        controller.grounded = false;
+        controller.velocity = Vec3::ZERO;
         return;
     }
 
@@ -181,8 +198,52 @@ pub fn player_movement(
     }
 
     controller.velocity.y -= GRAVITY * time.delta_secs();
-    let get_voxel = voxel_world.get_voxel_fn();
-    move_with_collision(&mut transform, &mut controller, get_voxel, time.delta_secs());
+    move_with_collision(&mut transform, &mut controller, get_voxel.clone(), time.delta_secs());
+    recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
+}
+
+fn move_by_delta(
+    position: &mut Vec3,
+    delta: Vec3,
+    get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized),
+) {
+    let mut new_pos = *position;
+
+    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+        let movement = axis * delta.dot(axis);
+        if movement.length_squared() == 0.0 {
+            continue;
+        }
+        let candidate = new_pos + movement;
+        if !collides(candidate, get_voxel) {
+            new_pos = candidate;
+        }
+    }
+
+    *position = new_pos;
+}
+
+fn recover_if_below_surface(
+    transform: &mut Transform,
+    seed: u32,
+    get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized),
+) {
+    let x = transform.translation.x.floor() as i32;
+    let z = transform.translation.z.floor() as i32;
+    let min_feet_y = terrain_surface_height(seed, x, z) as f32 + 1.0;
+
+    if transform.translation.y >= min_feet_y && !collides(transform.translation, get_voxel) {
+        return;
+    }
+
+    transform.translation.y = min_feet_y;
+    for offset in 0..=6 {
+        let candidate = transform.translation + Vec3::new(0.0, offset as f32, 0.0);
+        if !collides(candidate, get_voxel) {
+            transform.translation = candidate;
+            return;
+        }
+    }
 }
 
 fn move_with_collision(
@@ -247,19 +308,20 @@ fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {
     }
 }
 
-pub fn find_spawn_position(voxel_world: &VoxelWorld<BridgetWorld>) -> Vec3 {
-    let get_voxel = voxel_world.get_voxel_fn();
-    for z in -4..=4 {
-        for x in -4..=4 {
-            for y in (1..40).rev() {
-                let pos = IVec3::new(x, y, z);
-                let below = get_voxel(pos);
-                let above = get_voxel(pos + IVec3::Y);
-                if is_solid_voxel(below) && !is_solid_voxel(above) {
-                    return pos.as_vec3() + Vec3::new(0.5, 1.0, 0.5);
-                }
+pub fn find_spawn_position(seed: u32) -> Vec3 {
+    let mut best = (0, 0, terrain_surface_height(seed, 0, 0));
+    for z in -8..=8 {
+        for x in -8..=8 {
+            let height = terrain_surface_height(seed, x, z);
+            if height >= best.2 {
+                best = (x, z, height);
             }
         }
     }
-    Vec3::new(0.5, 12.0, 0.5)
+
+    Vec3::new(
+        best.0 as f32 + 0.5,
+        best.2 as f32 + 1.0,
+        best.1 as f32 + 0.5,
+    )
 }

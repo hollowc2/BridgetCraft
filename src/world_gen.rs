@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bevy::platform::collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -24,23 +24,56 @@ impl Default for WorldMetadata {
 }
 
 pub fn terrain_lookup(seed: u32) -> VoxelLookupDelegate<u8> {
-    Box::new(move |_chunk_pos, _lod, _previous| terrain_voxel_fn(seed))
+    let lookup = terrain_voxel_lookup(seed);
+    Box::new(move |_chunk_pos, _lod, _previous| {
+        let lookup = lookup.clone();
+        Box::new(move |pos: IVec3, _previous| lookup(pos))
+    })
 }
 
-fn terrain_voxel_fn(seed: u32) -> Box<dyn Fn(IVec3, Option<WorldVoxel<u8>>) -> WorldVoxel<u8> + Send + Sync> {
-    let mut height_noise = HybridMulti::<Perlin>::new(seed as u32);
+fn height_noise(seed: u32) -> HybridMulti<Perlin> {
+    let mut height_noise = HybridMulti::<Perlin>::new(seed);
     height_noise.octaves = 4;
     height_noise.frequency = 0.35;
     height_noise.lacunarity = 2.0;
     height_noise.persistence = 0.45;
+    height_noise
+}
 
+pub fn terrain_surface_height(seed: u32, x: i32, z: i32) -> i32 {
+    let height_noise = height_noise(seed);
+    let sample = height_noise.get([x as f64 * 0.04, z as f64 * 0.04]);
+    4 + (sample * 6.0).round() as i32
+}
+
+pub fn terrain_voxel_at(pos: IVec3, height: i32) -> WorldVoxel<u8> {
+    if pos.y < 0 {
+        return WorldVoxel::Solid(BlockId::Stone.as_material());
+    }
+
+    if pos.y > height {
+        return WorldVoxel::Air;
+    }
+
+    if pos.y == height {
+        if height <= 5 {
+            return WorldVoxel::Solid(BlockId::Sand.as_material());
+        }
+        return WorldVoxel::Solid(BlockId::DirtGrass.as_material());
+    }
+
+    if pos.y >= height - 3 {
+        return WorldVoxel::Solid(BlockId::Dirt.as_material());
+    }
+
+    WorldVoxel::Solid(BlockId::Stone.as_material())
+}
+
+pub fn terrain_voxel_lookup(seed: u32) -> Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync> {
+    let height_noise = height_noise(seed);
     let cache = Mutex::new(HashMap::<(i32, i32), i32>::new());
 
-    Box::new(move |pos: IVec3, _previous| {
-        if pos.y < 0 {
-            return WorldVoxel::Solid(BlockId::Stone.as_material());
-        }
-
+    Arc::new(move |pos: IVec3| {
         let height = {
             let mut cache = cache.lock().unwrap();
             match cache.get(&(pos.x, pos.z)) {
@@ -54,25 +87,7 @@ fn terrain_voxel_fn(seed: u32) -> Box<dyn Fn(IVec3, Option<WorldVoxel<u8>>) -> W
             }
         };
 
-        if pos.y > height {
-            if pos.y <= 32 {
-                return WorldVoxel::Air;
-            }
-            return WorldVoxel::Air;
-        }
-
-        if pos.y == height {
-            if height <= 5 {
-                return WorldVoxel::Solid(BlockId::Sand.as_material());
-            }
-            return WorldVoxel::Solid(BlockId::DirtGrass.as_material());
-        }
-
-        if pos.y >= height - 3 {
-            return WorldVoxel::Solid(BlockId::Dirt.as_material());
-        }
-
-        WorldVoxel::Solid(BlockId::Stone.as_material())
+        terrain_voxel_at(pos, height)
     })
 }
 
@@ -87,12 +102,7 @@ pub fn decorate_trees(seed: u32, center: IVec3, radius: i32) -> Vec<(IVec3, Worl
                 continue;
             }
 
-            let mut height_noise = HybridMulti::<Perlin>::new(seed as u32);
-            height_noise.octaves = 4;
-            height_noise.frequency = 0.35;
-            height_noise.lacunarity = 2.0;
-            height_noise.persistence = 0.45;
-            let surface = 4 + (height_noise.get([x as f64 * 0.04, z as f64 * 0.04]) * 6.0).round() as i32;
+            let surface = terrain_surface_height(seed, x, z);
 
             for trunk_y in 1..=4 {
                 edits.push((
