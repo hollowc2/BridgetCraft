@@ -129,7 +129,7 @@ impl Default for PlayerSettings {
             mouse_sensitivity: MOUSE_SENSITIVITY,
             gamepad_look_sensitivity: GAMEPAD_LOOK_SENSITIVITY,
             render_distance: 4,
-            shadow_quality: ShadowQuality::Low,
+            shadow_quality: ShadowQuality::Off,
             show_diagnostics: false,
             gravity_mode: GravityMode::Normal,
             fly_activation: FlyActivation::Off,
