@@ -24,7 +24,11 @@ use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdi
 use ui::hud::{
     cleanup_hud, hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info,
 };
-use ui::menu::{cleanup_menu, menu_button_interaction, spawn_main_menu};
+use ui::menu::{
+    cleanup_menu, menu_button_interaction, menu_input_display, menu_input_focus,
+    menu_input_keyboard, menu_input_unfocus, menu_player_name, spawn_main_menu, MenuFocus,
+    MenuSettings,
+};
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use world_gen::{decorate_trees, WorldMetadata};
 
@@ -70,13 +74,26 @@ fn main() {
         .init_resource::<WorldEdits>()
         .init_resource::<HotbarSelection>()
         .init_resource::<NetworkRole>()
+        .init_resource::<MenuSettings>()
+        .init_resource::<MenuFocus>()
         .init_resource::<PlayerSettings>()
         .init_resource::<SaveTimer>()
         .init_resource::<DayNightCycle>()
         .add_systems(Startup, setup_ui_camera)
         .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
         .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
-        .add_systems(Update, menu_button_interaction.run_if(in_state(AppState::MainMenu)))
+        .add_systems(
+            Update,
+            (
+                menu_input_focus,
+                menu_input_keyboard,
+                menu_input_unfocus,
+                menu_input_display,
+                menu_button_interaction,
+            )
+                .chain()
+                .run_if(in_state(AppState::MainMenu)),
+        )
         .add_systems(
             OnEnter(AppState::InGame),
             (
@@ -128,6 +145,7 @@ fn setup_ui_camera(mut commands: Commands) {
 fn setup_world(
     mut commands: Commands,
     metadata: Res<WorldMetadata>,
+    menu_settings: Res<MenuSettings>,
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
     mut voxel_world: VoxelWorld<BridgetWorld>,
@@ -138,17 +156,13 @@ fn setup_world(
     spawn_sky(&mut commands, meshes, materials);
 
     let spawn = find_spawn_position(metadata.seed);
-    let player_name = match &*role {
-        NetworkRole::Host { .. } => "Host",
-        NetworkRole::Client { .. } => "Guest",
-        NetworkRole::None => "Builder",
-    };
+    let player_name = menu_player_name(&menu_settings);
 
-    let player = spawn_player(&mut commands, player_name, spawn);
+    let player = spawn_player(&mut commands, &player_name, spawn);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {
-            name: player_name.to_string(),
+            name: player_name.clone(),
             selected_block: block::BlockId::DirtGrass.as_material(),
         },
         net::replicate::NetworkTransform::default(),

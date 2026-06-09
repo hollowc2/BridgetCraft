@@ -17,7 +17,7 @@ pub struct WorldMetadata {
 impl Default for WorldMetadata {
     fn default() -> Self {
         Self {
-            name: "New World".to_string(),
+            name: "Whispering Brickshire".to_string(),
             seed: 42_424,
         }
     }
