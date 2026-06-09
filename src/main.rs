@@ -39,8 +39,8 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
-    apply_shadow_settings, configure_sky_cubemap, spawn_celestial_bodies, spawn_sky,
-    spawn_sun_and_ambient, update_day_night, DayNightCycle,
+    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_player, spawn_sky,
+    spawn_sun_and_ambient, update_celestial_bodies, update_day_night, DayNightCycle,
 };
 use world_gen::{ProceduralTerrain, WorldMetadata};
 
@@ -129,9 +129,15 @@ fn main() {
         )
         .add_systems(
             Update,
+            configure_sky_cubemap.run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            Update,
             (
                 sync_world_seed,
                 mouse_look,
+                follow_sky_to_player.after(mouse_look),
+                update_celestial_bodies.after(follow_sky_to_player),
                 player_movement,
                 update_block_target,
                 handle_block_interaction,
@@ -140,7 +146,6 @@ fn main() {
                 update_network_info,
                 auto_save_system,
                 save_on_exit,
-                configure_sky_cubemap,
                 apply_shadow_settings,
                 update_day_night,
                 sync_diagnostics_overlay,
@@ -190,9 +195,8 @@ fn setup_world(
     let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
-    let (player, camera) = spawn_player(&mut commands, &player_name, spawn);
-    spawn_celestial_bodies(&mut commands, camera, &asset_server, meshes, materials);
-    spawn_sky(&mut commands, &asset_server);
+    let (player, _camera) = spawn_player(&mut commands, &player_name, spawn);
+    spawn_sky(&mut commands, &asset_server, meshes, materials);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {

@@ -3,7 +3,7 @@ use bevy::core_pipeline::Skybox;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
-use crate::player::{Player, PlayerCamera, PlayerController, PlayerSettings, ShadowQuality};
+use crate::player::{Player, PlayerCamera, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
 const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
@@ -32,6 +32,9 @@ impl Default for DayNightCycle {
         Self { phase: 0.2 }
     }
 }
+
+#[derive(Component)]
+pub(crate) struct SkyRoot;
 
 #[derive(Component, Clone, Copy)]
 pub(crate) enum CelestialBody {
@@ -127,21 +130,18 @@ pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands, settings: &PlayerSe
     });
 }
 
-pub(crate) fn spawn_sky(commands: &mut Commands, asset_server: &Res<AssetServer>) {
+pub(crate) fn spawn_sky(
+    commands: &mut Commands,
+    asset_server: &Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
     let cubemap = asset_server.load(SKY_CUBEMAP);
     commands.insert_resource(SkyCubemap {
         image: cubemap,
         configured: false,
     });
-}
 
-pub(crate) fn spawn_celestial_bodies(
-    commands: &mut Commands,
-    camera: Entity,
-    asset_server: &Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
     let sun_texture = asset_server.load(SUN_TEXTURE);
     let moon_texture = asset_server.load(MOON_TEXTURE);
 
@@ -163,26 +163,32 @@ pub(crate) fn spawn_celestial_bodies(
     let celestial_half = Vec2::splat(CELESTIAL_SIZE * 0.5);
     let celestial_mesh = meshes.add(Plane3d::new(Vec3::Z, celestial_half));
 
-    commands.entity(camera).with_children(|parent| {
-        parent.spawn((
+    commands
+        .spawn((
             WorldScene,
-            CelestialBody::Sun,
-            Mesh3d(celestial_mesh.clone()),
-            MeshMaterial3d(sun_material),
+            SkyRoot,
             Transform::default(),
-            Visibility::Hidden,
-            Name::new("SunSprite"),
-        ));
-        parent.spawn((
-            WorldScene,
-            CelestialBody::Moon,
-            Mesh3d(celestial_mesh),
-            MeshMaterial3d(moon_material),
-            Transform::default(),
-            Visibility::Hidden,
-            Name::new("MoonSprite"),
-        ));
-    });
+            Visibility::default(),
+            Name::new("SkyRoot"),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                CelestialBody::Sun,
+                Mesh3d(celestial_mesh.clone()),
+                MeshMaterial3d(sun_material),
+                Transform::default(),
+                Visibility::Hidden,
+                Name::new("SunSprite"),
+            ));
+            parent.spawn((
+                CelestialBody::Moon,
+                Mesh3d(celestial_mesh),
+                MeshMaterial3d(moon_material),
+                Transform::default(),
+                Visibility::Hidden,
+                Name::new("MoonSprite"),
+            ));
+        });
 }
 
 pub(crate) fn configure_sky_cubemap(
@@ -235,6 +241,19 @@ pub(crate) fn configure_sky_cubemap(
     cubemap.configured = true;
 }
 
+pub(crate) fn follow_sky_to_player(
+    players: Query<&Transform, With<Player>>,
+    mut sky: Query<&mut Transform, (With<SkyRoot>, Without<Player>)>,
+) {
+    let Ok(player) = players.single() else {
+        return;
+    };
+    let Ok(mut sky_transform) = sky.single_mut() else {
+        return;
+    };
+    sky_transform.translation = player.translation;
+}
+
 pub(crate) fn apply_shadow_settings(
     settings: Res<PlayerSettings>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
@@ -263,14 +282,9 @@ pub(crate) fn update_day_night(
     settings: Res<PlayerSettings>,
     mut cycle: ResMut<DayNightCycle>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    players: Query<&PlayerController, With<Player>>,
     mut sun_lights: Query<
         (&mut DirectionalLight, &mut Transform),
         (With<SunLight>, Without<CelestialBody>),
-    >,
-    mut celestial: Query<
-        (&CelestialBody, &mut Transform, &mut Visibility),
-        Without<SunLight>,
     >,
     mut skyboxes: Query<&mut Skybox, With<PlayerCamera>>,
     mut cached_brightness: Local<f32>,
@@ -328,12 +342,17 @@ pub(crate) fn update_day_night(
             twilight * 0.35,
         )
     };
+}
 
-    let Ok(controller) = players.single() else {
-        return;
-    };
-    let camera_rotation =
-        Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
+pub(crate) fn update_celestial_bodies(
+    cycle: Res<DayNightCycle>,
+    mut celestial: Query<
+        (&CelestialBody, &mut Transform, &mut Visibility),
+        (With<CelestialBody>, Without<SunLight>, Without<SkyRoot>),
+    >,
+) {
+    let sun_dir = sun_direction(cycle.phase);
+    let moon_dir = moon_direction(cycle.phase);
 
     for (body, mut transform, mut visibility) in &mut celestial {
         let (direction, fade) = match body {
@@ -347,9 +366,8 @@ pub(crate) fn update_day_night(
         }
 
         *visibility = Visibility::Visible;
-        let local_offset = camera_rotation.inverse() * (direction * CELESTIAL_DISTANCE);
-        let mut billboard = Transform::from_translation(local_offset);
-        billboard.look_at(Vec3::ZERO, Vec3::Y);
+        let mut billboard =
+            Transform::from_translation(direction * CELESTIAL_DISTANCE).looking_at(Vec3::ZERO, Vec3::Y);
         billboard.scale = Vec3::splat(fade);
         *transform = billboard;
     }
