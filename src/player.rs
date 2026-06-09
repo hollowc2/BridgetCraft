@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_voxel_world::prelude::*;
 
+use crate::audio::{spatial_audio_listener, GameAudio};
 use crate::block::BlockId;
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::{terrain_surface_height, terrain_voxel_lookup};
@@ -29,6 +30,16 @@ pub struct PlayerController {
     pub grounded: bool,
     pub flying: bool,
     pub fly_toggle_cooldown: f32,
+    pub footstep_timer: Timer,
+}
+
+impl PlayerController {
+    fn new() -> Self {
+        Self {
+            footstep_timer: Timer::from_seconds(0.42, TimerMode::Repeating),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -55,6 +66,7 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
                 ..default()
             },
             PlayerCamera,
+            spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
             Transform::from_xyz(0.0, PLAYER_HEIGHT - 0.2, 0.0),
         ))
@@ -63,7 +75,7 @@ pub fn spawn_player(commands: &mut Commands, name: &str, position: Vec3) -> Enti
     commands
         .spawn((
             Player,
-            PlayerController::default(),
+            PlayerController::new(),
             Transform::from_translation(position),
             Visibility::default(),
             Name::new(name.to_string()),
@@ -120,6 +132,8 @@ pub fn player_movement(
     metadata: Res<crate::world_gen::WorldMetadata>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
+    mut audio: ResMut<GameAudio>,
+    mut commands: Commands,
 ) {
     let Ok((mut transform, mut controller)) = players.single_mut() else {
         return;
@@ -200,6 +214,21 @@ pub fn player_movement(
     controller.velocity.y -= GRAVITY * time.delta_secs();
     move_with_collision(&mut transform, &mut controller, get_voxel.clone(), time.delta_secs());
     recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
+
+    let moving = Vec2::new(controller.velocity.x, controller.velocity.z).length() > 0.5;
+    if controller.grounded && moving {
+        controller.footstep_timer.tick(time.delta());
+        if controller.footstep_timer.just_finished() {
+            audio.play_footstep_at_feet(
+                &mut commands,
+                &voxel_world,
+                &metadata,
+                transform.translation,
+            );
+        }
+    } else {
+        controller.footstep_timer.reset();
+    }
 }
 
 fn move_by_delta(

@@ -3,11 +3,13 @@ use bevy_replicon::prelude::*;
 use bevy_voxel_world::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::block::SavedVoxel;
+use crate::audio::{voxel_block_at, GameAudio};
+use crate::block::{BlockId, SavedVoxel};
 use crate::interaction::apply_block_edit;
 use crate::player::Player;
 use crate::save::WorldEdits;
 use crate::voxel_config::BridgetWorld;
+use crate::world_gen::WorldMetadata;
 
 #[derive(Component, Serialize, Deserialize, Clone)]
 #[require(Replicated)]
@@ -86,14 +88,37 @@ fn apply_block_edit_broadcast(
     mut voxel_world: VoxelWorld<BridgetWorld>,
     mut edits: ResMut<WorldEdits>,
     role: Res<crate::net::NetworkRole>,
+    metadata: Res<WorldMetadata>,
+    mut audio: ResMut<GameAudio>,
+    mut commands: Commands,
 ) {
-    if role.is_client() {
-        apply_block_edit(
-            &mut voxel_world,
-            &mut edits,
-            broadcast.pos,
-            broadcast.voxel.to_world_voxel(),
-        );
+    if !role.is_client() {
+        return;
+    }
+
+    match broadcast.voxel {
+        SavedVoxel::Air => {
+            if let Some(block) = voxel_block_at(&voxel_world, &metadata, broadcast.pos) {
+                apply_block_edit(
+                    &mut voxel_world,
+                    &mut edits,
+                    broadcast.pos,
+                    WorldVoxel::Air,
+                );
+                audio.play_block_break(&mut commands, block, broadcast.pos);
+            }
+        }
+        SavedVoxel::Solid(material) => {
+            apply_block_edit(
+                &mut voxel_world,
+                &mut edits,
+                broadcast.pos,
+                broadcast.voxel.to_world_voxel(),
+            );
+            if let Some(block) = BlockId::from_material(material) {
+                audio.play_block_place(&mut commands, block, broadcast.pos);
+            }
+        }
     }
 }
 

@@ -2,11 +2,13 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientTriggerExt, ServerTriggerExt, ToClients, SendTargets};
 use bevy_voxel_world::prelude::*;
 
+use crate::audio::{voxel_block_at, GameAudio};
 use crate::block::HotbarSelection;
 use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};
 use crate::voxel_config::BridgetWorld;
+use crate::world_gen::WorldMetadata;
 
 #[derive(Component, Default)]
 pub struct BlockTarget {
@@ -54,6 +56,8 @@ pub fn handle_block_interaction(
     mut voxel_world: VoxelWorld<BridgetWorld>,
     mut edits: ResMut<WorldEdits>,
     role: Res<NetworkRole>,
+    metadata: Res<WorldMetadata>,
+    mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
     if role.is_client() {
@@ -78,23 +82,28 @@ pub fn handle_block_interaction(
 
     if buttons.just_pressed(MouseButton::Left) {
         if let Some(pos) = target.hit_pos {
-            apply_block_edit(&mut voxel_world, &mut edits, pos, WorldVoxel::Air);
-            if role.is_host() {
-                commands.server_trigger(ToClients {
-                    targets: SendTargets::CLIENTS_ONLY,
-                    message: BlockEditBroadcast {
-                        pos,
-                        voxel: SavedVoxel::Air,
-                    },
-                });
+            if let Some(block) = voxel_block_at(&voxel_world, &metadata, pos) {
+                apply_block_edit(&mut voxel_world, &mut edits, pos, WorldVoxel::Air);
+                audio.play_block_break(&mut commands, block, pos);
+                if role.is_host() {
+                    commands.server_trigger(ToClients {
+                        targets: SendTargets::CLIENTS_ONLY,
+                        message: BlockEditBroadcast {
+                            pos,
+                            voxel: SavedVoxel::Air,
+                        },
+                    });
+                }
             }
         }
     }
 
     if buttons.just_pressed(MouseButton::Right) {
         if let Some(pos) = target.place_pos {
-            let voxel = selection.selected_block().to_world_voxel();
+            let block = selection.selected_block();
+            let voxel = block.to_world_voxel();
             apply_block_edit(&mut voxel_world, &mut edits, pos, voxel);
+            audio.play_block_place(&mut commands, block, pos);
             if role.is_host() {
                 commands.server_trigger(ToClients {
                     targets: SendTargets::CLIENTS_ONLY,

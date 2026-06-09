@@ -1,3 +1,4 @@
+mod audio;
 mod block;
 mod interaction;
 mod net;
@@ -12,6 +13,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use bevy_voxel_world::prelude::*;
 
+use audio::GameAudioPlugin;
 use block::HotbarSelection;
 use interaction::{handle_block_interaction, update_block_target, BlockTarget};
 use net::host::show_host_message;
@@ -67,6 +69,7 @@ fn main() {
             }),
         )
         .add_plugins(EguiPlugin::default())
+        .add_plugins(GameAudioPlugin)
         .add_plugins(VoxelConfigPlugin)
         .add_plugins(NetworkPlugin)
         .init_state::<AppState>()
