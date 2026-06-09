@@ -5,11 +5,11 @@ mod interaction;
 mod net;
 mod player;
 mod save;
+mod sky;
 mod ui;
 mod voxel_config;
 mod world_gen;
 
-use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 use bevy_voxel_world::prelude::*;
@@ -32,9 +32,9 @@ use ui::menu::{
 };
 use ui::game_menu::{
     cleanup_world, game_menu_button_interaction, menu_closed, toggle_game_menu, GameMenuOpen,
-    WorldScene,
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
+use sky::{follow_sky_to_camera, spawn_sky, spawn_sun_and_ambient, update_day_night, DayNightCycle};
 use world_gen::{decorate_trees, WorldMetadata};
 
 #[derive(States, Default, Clone, Eq, PartialEq, Debug, Hash)]
@@ -42,21 +42,6 @@ pub enum AppState {
     #[default]
     MainMenu,
     InGame,
-}
-
-#[derive(Resource)]
-struct DayNightCycle {
-    timer: Timer,
-    phase: f32,
-}
-
-impl Default for DayNightCycle {
-    fn default() -> Self {
-        Self {
-            timer: Timer::from_seconds(120.0, TimerMode::Repeating),
-            phase: 0.15,
-        }
-    }
 }
 
 fn main() {
@@ -129,6 +114,7 @@ fn main() {
                 update_network_info,
                 auto_save_system,
                 save_on_exit,
+                follow_sky_to_camera,
                 update_day_night,
                 settings_ui,
             )
@@ -155,6 +141,7 @@ fn setup_ui_camera(mut commands: Commands) {
 
 fn setup_world(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     metadata: Res<WorldMetadata>,
     menu_settings: Res<MenuSettings>,
     mut edits: ResMut<WorldEdits>,
@@ -164,7 +151,7 @@ fn setup_world(
     materials: ResMut<Assets<StandardMaterial>>,
 ) {
     spawn_sun_and_ambient(&mut commands);
-    spawn_sky(&mut commands, meshes, materials);
+    spawn_sky(&mut commands, asset_server, meshes, materials);
 
     let spawn = find_spawn_position(metadata.seed);
     let player_name = menu_player_name(&menu_settings);
@@ -188,68 +175,6 @@ fn setup_world(
 
     spawn_hud(&mut commands);
     info!("world '{}' ready (seed {})", metadata.name, metadata.seed);
-}
-
-fn spawn_sun_and_ambient(commands: &mut Commands) {
-    let cascade_shadow_config = CascadeShadowConfigBuilder {
-        maximum_distance: 256.0,
-        ..default()
-    }
-    .build();
-
-    commands.spawn((
-        WorldScene,
-        DirectionalLight {
-            illuminance: 18_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(1.0, 2.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y),
-        cascade_shadow_config,
-        Name::new("Sun"),
-    ));
-
-    commands.insert_resource(GlobalAmbientLight {
-        brightness: 250.0,
-        ..default()
-    });
-}
-
-fn spawn_sky(
-    commands: &mut Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands.spawn((
-        WorldScene,
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.75, 0.95),
-            unlit: true,
-            ..default()
-        })),
-        Transform::from_scale(Vec3::splat(800.0)),
-        Name::new("Sky"),
-    ));
-}
-
-fn update_day_night(
-    time: Res<Time>,
-    mut cycle: ResMut<DayNightCycle>,
-    mut lights: Query<&mut DirectionalLight>,
-    mut ambient: ResMut<GlobalAmbientLight>,
-) {
-    cycle.timer.tick(time.delta());
-    if cycle.timer.just_finished() {
-        cycle.phase = (cycle.phase + 0.25) % 1.0;
-    }
-
-    let daylight = (cycle.phase * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-    for mut light in &mut lights {
-        light.illuminance = 4_000.0 + daylight * 20_000.0;
-        light.color = Color::srgb(0.95, 0.9 + daylight * 0.05, 0.8 + daylight * 0.1);
-    }
-    ambient.brightness = 80.0 + daylight * 220.0;
 }
 
 fn settings_ui(
