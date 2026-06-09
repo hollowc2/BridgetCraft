@@ -15,6 +15,8 @@ pub const WALK_SPEED: f32 = 6.0;
 pub const FLY_SPEED: f32 = 10.0;
 pub const JUMP_SPEED: f32 = 8.0;
 pub const GRAVITY: f32 = 22.0;
+pub const LOW_GRAVITY_MULTIPLIER: f32 = 0.35;
+pub const DOUBLE_TAP_JUMP_WINDOW: f32 = 0.35;
 pub const MOUSE_SENSITIVITY: f32 = 0.002;
 pub const GAMEPAD_LOOK_SENSITIVITY: f32 = 2.5;
 pub const GAMEPAD_MOVE_DEADZONE: f32 = 0.15;
@@ -32,7 +34,7 @@ pub struct PlayerController {
     pub velocity: Vec3,
     pub grounded: bool,
     pub flying: bool,
-    pub fly_toggle_cooldown: f32,
+    pub last_jump_press_time: f32,
     pub footstep_timer: Timer,
 }
 
@@ -45,11 +47,58 @@ impl PlayerController {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum GravityMode {
+    #[default]
+    Normal,
+    Low,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum FlyActivation {
+    #[default]
+    Off,
+    Always,
+    DoubleTap,
+}
+
+impl GravityMode {
+    pub fn multiplier(self) -> f32 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Low => LOW_GRAVITY_MULTIPLIER,
+        }
+    }
+
+    pub const ALL: [Self; 2] = [Self::Normal, Self::Low];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Low => "Low",
+        }
+    }
+}
+
+impl FlyActivation {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Always, Self::DoubleTap];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Always => "Always on",
+            Self::DoubleTap => "Double-tap jump",
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct PlayerSettings {
     pub mouse_sensitivity: f32,
     pub gamepad_look_sensitivity: f32,
     pub render_distance: u32,
+    pub gravity_mode: GravityMode,
+    pub fly_activation: FlyActivation,
 }
 
 impl Default for PlayerSettings {
@@ -58,6 +107,8 @@ impl Default for PlayerSettings {
             mouse_sensitivity: MOUSE_SENSITIVITY,
             gamepad_look_sensitivity: GAMEPAD_LOOK_SENSITIVITY,
             render_distance: 6,
+            gravity_mode: GravityMode::Normal,
+            fly_activation: FlyActivation::Off,
         }
     }
 }
@@ -145,6 +196,7 @@ pub fn mouse_look(
 
 pub fn player_movement(
     time: Res<Time>,
+    settings: Res<PlayerSettings>,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
     metadata: Res<crate::world_gen::WorldMetadata>,
@@ -161,19 +213,17 @@ pub fn player_movement(
     let jump_pressed = keys.just_pressed(KeyCode::Space)
         || gamepad.is_some_and(|gamepad| gamepad.just_pressed(GamepadButton::South));
 
-    controller.fly_toggle_cooldown = (controller.fly_toggle_cooldown - time.delta_secs()).max(0.0);
-
-    if controller.fly_toggle_cooldown <= 0.0 && jump_pressed {
+    let mut double_tap_fly = false;
+    if jump_pressed {
         let now = time.elapsed_secs();
-        // Double-tap detection via cooldown trick: if space pressed while still grounded recently
-        let jump_held = keys.pressed(KeyCode::Space)
-            || gamepad.is_some_and(|gamepad| gamepad.pressed(GamepadButton::South));
-        if jump_held && controller.grounded {
-            controller.flying = !controller.flying;
-            controller.fly_toggle_cooldown = 0.35;
+        if settings.fly_activation == FlyActivation::DoubleTap
+            && now - controller.last_jump_press_time < DOUBLE_TAP_JUMP_WINDOW
+        {
+            controller.flying = true;
             controller.velocity.y = 0.0;
-            let _ = now;
+            double_tap_fly = true;
         }
+        controller.last_jump_press_time = now;
     }
 
     let forward = Vec3::new(-controller.yaw.sin(), 0.0, -controller.yaw.cos());
@@ -211,7 +261,10 @@ pub fn player_movement(
         }
     });
 
-    if controller.flying {
+    let fly_active =
+        settings.fly_activation == FlyActivation::Always || controller.flying;
+
+    if fly_active {
         if keys.pressed(KeyCode::Space)
             || gamepad.is_some_and(|gamepad| gamepad.pressed(GamepadButton::South))
         {
@@ -230,8 +283,17 @@ pub fn player_movement(
             move_by_delta(&mut transform.translation, delta, &*get_voxel);
         }
         recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
-        controller.grounded = false;
-        controller.velocity = Vec3::ZERO;
+
+        if settings.fly_activation == FlyActivation::DoubleTap
+            && is_grounded(transform.translation, &*get_voxel)
+        {
+            controller.flying = false;
+            controller.grounded = true;
+            controller.velocity = Vec3::ZERO;
+        } else {
+            controller.grounded = false;
+            controller.velocity = Vec3::ZERO;
+        }
         return;
     }
 
@@ -244,12 +306,13 @@ pub fn player_movement(
         controller.velocity.z = 0.0;
     }
 
-    if controller.grounded && jump_pressed {
+    if controller.grounded && jump_pressed && !double_tap_fly {
         controller.velocity.y = JUMP_SPEED;
         controller.grounded = false;
     }
 
-    controller.velocity.y -= GRAVITY * time.delta_secs();
+    let gravity = GRAVITY * settings.gravity_mode.multiplier();
+    controller.velocity.y -= gravity * time.delta_secs();
     move_with_collision(&mut transform, &mut controller, get_voxel.clone(), time.delta_secs());
     recover_if_below_surface(&mut transform, metadata.seed, &*get_voxel);
 

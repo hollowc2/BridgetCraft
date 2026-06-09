@@ -21,7 +21,7 @@ use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
     find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor, spawn_player,
-    PlayerSettings,
+    FlyActivation, GravityMode, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -276,5 +276,25 @@ fn settings_ui(
                 bevy_egui::egui::Slider::new(&mut settings.gamepad_look_sensitivity, 0.5..=6.0)
                     .text("Gamepad look sensitivity"),
             );
+
+            ui.separator();
+            ui.label("Movement");
+            ui.horizontal(|ui| {
+                ui.label("Gravity:");
+                for mode in GravityMode::ALL {
+                    ui.selectable_value(&mut settings.gravity_mode, mode, mode.label());
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Fly mode:");
+                for mode in FlyActivation::ALL {
+                    ui.selectable_value(&mut settings.fly_activation, mode, mode.label());
+                }
+            });
+            if settings.fly_activation == FlyActivation::DoubleTap {
+                ui.label("Double-tap jump to fly; landing ends flight.");
+            } else if settings.fly_activation == FlyActivation::Always {
+                ui.label("Space rises, Shift descends.");
+            }
         });
 }
