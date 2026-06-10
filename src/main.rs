@@ -141,7 +141,7 @@ fn main() {
         OnExit(AppState::InGame),
         (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
     )
-    .add_systems(Update, toggle_performance_overlay)
+    .add_systems(Update, (toggle_performance_overlay, warn_if_voxel_atlas_failed))
     .add_systems(
         Update,
         (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
@@ -185,6 +185,9 @@ fn main() {
 
     app.run();
 }
+
+#[derive(Resource)]
+struct VoxelAtlasHandle(Handle<Image>);
 
 #[derive(Component)]
 struct UiCamera;
@@ -239,13 +242,13 @@ fn setup_world(
 
     spawn_hud(&mut commands);
 
-    let atlas_path = std::path::Path::new("assets/textures/voxel_atlas.png");
-    if !atlas_path.exists() {
+    let atlas_path = "textures/voxel_atlas.png";
+    if !std::path::Path::new("assets").join(atlas_path).exists() {
         warn!(
-            "missing {}; run `cargo build` to generate textures from Kenney tiles",
-            atlas_path.display()
+            "missing assets/{atlas_path}; run `cargo build` to generate textures from Kenney tiles"
         );
     }
+    commands.insert_resource(VoxelAtlasHandle(asset_server.load(atlas_path)));
 
     info!("world '{}' ready (seed {})", metadata.name, metadata.seed);
 }
@@ -330,6 +333,31 @@ fn settings_ui(
                 ui.label("Space rises, Shift descends.");
             }
         });
+}
+
+fn warn_if_voxel_atlas_failed(
+    asset_server: Res<AssetServer>,
+    atlas: Option<Res<VoxelAtlasHandle>>,
+    mut warned: Local<bool>,
+) {
+    if *warned {
+        return;
+    }
+    let Some(atlas) = atlas else {
+        return;
+    };
+
+    match asset_server.get_load_state(atlas.0.id()) {
+        Some(bevy::asset::LoadState::Failed(err)) => {
+            *warned = true;
+            error!(
+                "voxel atlas failed to load ({err}). Terrain will stay invisible until you run \
+                 `cargo build` to regenerate assets/textures/voxel_atlas.png"
+            );
+        }
+        Some(bevy::asset::LoadState::Loaded) => *warned = true,
+        _ => {}
+    }
 }
 
 fn toggle_performance_overlay(

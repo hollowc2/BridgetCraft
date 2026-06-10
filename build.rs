@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let out_dir = Path::new("assets/textures");
@@ -53,16 +54,55 @@ fn main() {
     }
 
     let atlas_path = out_dir.join("voxel_atlas.png");
-    atlas
-        .save(&atlas_path)
-        .unwrap_or_else(|err| panic!("failed to save {}: {err}", atlas_path.display()));
+    write_png_atomically(&atlas_path, &atlas);
 
     build_sky_cubemap(out_dir);
 
+    // Only depend on inputs. Do NOT rerun-if-changed on generated outputs: build.rs writes
+    // those files, so watching them forces a full rebuild on every `cargo run`.
     println!("cargo:rerun-if-changed=build.rs");
     for file in textures {
         println!("cargo:rerun-if-changed={}", tiles_dir.join(file).display());
     }
+}
+
+/// Write PNG to `path` via a temp file + rename so Bevy never reads a half-written atlas.
+fn write_png_atomically(path: &Path, image: &image::RgbaImage) {
+    let tmp = temp_path(path);
+
+    {
+        let mut file = fs::File::create(&tmp)
+            .unwrap_or_else(|err| panic!("failed to create {}: {err}", tmp.display()));
+        let mut buffer = Vec::new();
+        image::DynamicImage::ImageRgba8(image.clone())
+            .write_to(
+                &mut std::io::Cursor::new(&mut buffer),
+                image::ImageFormat::Png,
+            )
+            .unwrap_or_else(|err| panic!("failed to encode {}: {err}", path.display()));
+        file.write_all(&buffer)
+            .unwrap_or_else(|err| panic!("failed to write {}: {err}", tmp.display()));
+        file.sync_all()
+            .unwrap_or_else(|err| panic!("failed to flush {}: {err}", tmp.display()));
+    }
+
+    // Sanity-check before exposing the file to the asset server.
+    let bytes = fs::read(&tmp)
+        .unwrap_or_else(|err| panic!("failed to read back {}: {err}", tmp.display()));
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .unwrap_or_else(|err| panic!("generated PNG is unreadable at {}: {err}", tmp.display()));
+
+    fs::rename(&tmp, path).unwrap_or_else(|err| {
+        panic!(
+            "failed to move {} -> {}: {err}",
+            tmp.display(),
+            path.display()
+        )
+    });
+}
+
+fn temp_path(path: &Path) -> PathBuf {
+    path.with_extension("tmp.png")
 }
 
 fn build_sky_cubemap(out_dir: &Path) {
@@ -94,12 +134,9 @@ fn build_sky_cubemap(out_dir: &Path) {
     }
 
     let cubemap_path = out_dir.join("sky_cubemap.png");
-    cubemap
-        .save(&cubemap_path)
-        .unwrap_or_else(|err| panic!("failed to save {}: {err}", cubemap_path.display()));
+    write_png_atomically(&cubemap_path, &cubemap);
 
     for path in faces {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    println!("cargo:rerun-if-changed={}", cubemap_path.display());
 }
