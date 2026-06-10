@@ -24,8 +24,8 @@ use interaction::{
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
-    find_spawn_position, grab_cursor, mouse_look, player_movement, propagate_player_camera_global,
-    release_cursor, spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
+    find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor, spawn_player,
+    sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -39,9 +39,8 @@ use ui::game_menu::{
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
-    apply_shadow_settings, configure_sky_cubemap, follow_sky_to_player, initial_skybox,
-    spawn_sky, spawn_sun_and_ambient, update_celestial_bodies, update_day_night, DayNightCycle,
-    SKY_CUBEMAP,
+    apply_shadow_settings, follow_sky_to_player, spawn_sky, spawn_sun_and_ambient,
+    update_celestial_bodies, update_day_night, DayNightCycle,
 };
 use world_gen::{ProceduralTerrain, WorldMetadata};
 
@@ -84,7 +83,7 @@ fn main() {
         .add_plugins(GameAudioPlugin)
         .add_systems(
             PreUpdate,
-            propagate_player_camera_global.run_if(in_state(AppState::InGame)),
+            sync_player_camera.run_if(in_state(AppState::InGame)),
         )
         .add_plugins(VoxelConfigPlugin)
         .add_plugins(NetworkPlugin)
@@ -140,19 +139,14 @@ fn main() {
         )
         .add_systems(
             Update,
-            configure_sky_cubemap.run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
             (
                 sync_world_seed,
                 mouse_look,
                 sync_player_camera.after(mouse_look),
                 player_movement.after(sync_player_camera),
-                propagate_player_camera_global.after(player_movement),
-                follow_sky_to_player.after(propagate_player_camera_global),
+                follow_sky_to_player.after(player_movement),
                 update_celestial_bodies.after(follow_sky_to_player),
-                update_block_target.after(propagate_player_camera_global),
+                update_block_target.after(sync_player_camera),
                 handle_block_interaction,
                 hotbar_scroll,
                 update_hotbar_text,
@@ -204,25 +198,12 @@ fn setup_world(
     materials: ResMut<Assets<StandardMaterial>>,
 ) {
     spawn_sun_and_ambient(&mut commands, &settings);
-
-    let sky_cubemap = asset_server.load(SKY_CUBEMAP);
-    spawn_sky(
-        &mut commands,
-        sky_cubemap.clone(),
-        &asset_server,
-        meshes,
-        materials,
-    );
+    spawn_sky(&mut commands, &asset_server, meshes, materials);
 
     let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
-    let (player, _camera) = spawn_player(
-        &mut commands,
-        &player_name,
-        spawn,
-        initial_skybox(sky_cubemap),
-    );
+    let (player, _camera) = spawn_player(&mut commands, &player_name, spawn);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {

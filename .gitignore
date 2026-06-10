@@ -1,4 +1,4 @@
 /target
-/assets/textures/voxel_atlas.png
+/assets/textures/
 **/*.rs.bk
 .DS_Store

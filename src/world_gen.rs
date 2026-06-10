@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bevy::platform::collections::HashMap;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
 use bevy_voxel_world::prelude::*;
@@ -51,7 +52,7 @@ const TREE_LEAF_CLEARANCE: i32 = 6;
 pub struct ProceduralTerrain {
     pub seed: u32,
     height_noise: Arc<HybridMulti<Perlin>>,
-    height_cache: Arc<Mutex<HashMap<(i32, i32), i32>>>,
+    height_cache: Arc<DashMap<(i32, i32), i32>>,
     lookup: Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync>,
 }
 
@@ -110,30 +111,25 @@ impl Default for ProceduralTerrain {
 impl ProceduralTerrain {
     pub fn new(seed: u32) -> Self {
         let height_noise = Arc::new(build_height_noise(seed));
-        let height_cache = Arc::new(Mutex::new(HashMap::new()));
+        // Sharded concurrent caches: chunk meshing runs on the Bevy compute task pool, and a
+        // single global Mutex here serialized every thread, stalling startup. DashMap shards the
+        // locks so parallel voxel lookups no longer contend on one lock.
+        let height_cache: Arc<DashMap<(i32, i32), i32>> = Arc::new(DashMap::new());
         let tree_noise = Perlin::new(seed.wrapping_add(77_007));
         let tree_columns = build_tree_columns(&height_noise, &tree_noise);
         let landmarks = landmark_origins(&height_noise);
         let noise = height_noise.clone();
         let cache = height_cache.clone();
-        let voxel_cache = Arc::new(Mutex::new(HashMap::<IVec3, WorldVoxel<u8>>::new()));
+        let voxel_cache: Arc<DashMap<IVec3, WorldVoxel<u8>>> = Arc::new(DashMap::new());
         let memo = voxel_cache.clone();
         let lookup = Arc::new(move |pos: IVec3| {
-            if let Some(voxel) = memo.lock().unwrap().get(&pos) {
+            if let Some(voxel) = memo.get(&pos) {
                 return *voxel;
             }
 
-            let height = {
-                let mut cache = cache.lock().unwrap();
-                match cache.get(&(pos.x, pos.z)) {
-                    Some(height) => *height,
-                    None => {
-                        let height = terrain_surface_height_with(&noise, pos.x, pos.z);
-                        cache.insert((pos.x, pos.z), height);
-                        height
-                    }
-                }
-            };
+            let height = *cache
+                .entry((pos.x, pos.z))
+                .or_insert_with(|| terrain_surface_height_with(&noise, pos.x, pos.z));
 
             let voxel = if pos.y > height + TREE_LEAF_CLEARANCE {
                 WorldVoxel::Air
@@ -148,7 +144,7 @@ impl ProceduralTerrain {
                 terrain_voxel_at(pos, height)
             };
 
-            memo.lock().unwrap().insert(pos, voxel);
+            memo.insert(pos, voxel);
             voxel
         });
 
@@ -161,10 +157,10 @@ impl ProceduralTerrain {
     }
 
     pub fn surface_height(&self, x: i32, z: i32) -> i32 {
-        let mut cache = self.height_cache.lock().unwrap();
-        *cache.entry((x, z)).or_insert_with(|| {
-            terrain_surface_height_with(&self.height_noise, x, z)
-        })
+        *self
+            .height_cache
+            .entry((x, z))
+            .or_insert_with(|| terrain_surface_height_with(&self.height_noise, x, z))
     }
 
     pub fn voxel_at(&self, pos: IVec3) -> WorldVoxel<u8> {

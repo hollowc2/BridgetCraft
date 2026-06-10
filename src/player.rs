@@ -1,7 +1,5 @@
-use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy::render::view::NoIndirectDrawing;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_voxel_world::prelude::*;
 
@@ -144,11 +142,14 @@ pub fn spawn_player(
     commands: &mut Commands,
     name: &str,
     position: Vec3,
-    skybox: Skybox,
 ) -> (Entity, Entity) {
     let camera_rotation = Quat::from_rotation_x(INITIAL_LOOK_PITCH);
-    let eye_offset = Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    let eye_position = position + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    let camera_transform =
+        Transform::from_translation(eye_position).with_rotation(camera_rotation);
 
+    // Root-level camera so we can write GlobalTransform directly. bevy_voxel_world casts chunk
+    // rays from GlobalTransform in PreUpdate, before Bevy's transform propagation runs.
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -157,13 +158,14 @@ pub fn spawn_player(
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.53, 0.75, 0.92).into()),
                 ..default()
             },
-            Msaa::Off,
-            NoIndirectDrawing,
+            // NOTE: Do not add `Msaa::Off` here. bevy_voxel_world's chunk material pipeline
+            // renders nothing when MSAA is disabled on this camera, leaving only the blue
+            // clear color. Keep the default MSAA so terrain is visible.
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
-            skybox,
-            Transform::from_translation(eye_offset).with_rotation(camera_rotation),
+            camera_transform,
+            GlobalTransform::from(camera_transform),
         ))
         .id();
 
@@ -178,50 +180,29 @@ pub fn spawn_player(
             Visibility::default(),
             Name::new(name.to_string()),
         ))
-        .add_child(camera)
         .id();
 
     (player, camera)
 }
 
 pub fn sync_player_camera(
-    players: Query<(&PlayerController, &Children), With<Player>>,
-    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+    players: Query<(&Transform, &PlayerController), With<Player>>,
+    mut cameras: Query<
+        (&mut Transform, &mut GlobalTransform),
+        (With<PlayerCamera>, Without<Player>),
+    >,
 ) {
-    let Ok((controller, children)) = players.single() else {
+    let Ok((player, controller)) = players.single() else {
+        return;
+    };
+    let Ok((mut transform, mut global)) = cameras.single_mut() else {
         return;
     };
 
-    let rotation =
+    transform.translation = player.translation + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    transform.rotation =
         Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
-
-    for child in children.iter() {
-        if let Ok(mut camera) = cameras.get_mut(child) {
-            camera.rotation = rotation;
-        }
-    }
-}
-
-/// bevy_voxel_world and block raycasts read `GlobalTransform` before `TransformSystems::Propagate`
-/// runs in PostUpdate, so derive the camera's world pose from the player early in the frame.
-/// Uses the player's local `Transform` (root entity) rather than `GlobalTransform` to avoid
-/// Bevy's parent/child hierarchy query conflict when writing the camera's `GlobalTransform`.
-pub fn propagate_player_camera_global(
-    players: Query<(&Transform, &Children), With<Player>>,
-    mut cameras: Query<(&Transform, &mut GlobalTransform), With<PlayerCamera>>,
-) {
-    let Ok((player_transform, children)) = players.single() else {
-        return;
-    };
-
-    let player_global = GlobalTransform::from(*player_transform);
-
-    for child in children.iter() {
-        let Ok((camera_local, mut camera_global)) = cameras.get_mut(child) else {
-            continue;
-        };
-        *camera_global = player_global.mul_transform(*camera_local);
-    }
+    *global = GlobalTransform::from(*transform);
 }
 
 pub fn grab_cursor(mut cursor: Single<&mut CursorOptions>) {

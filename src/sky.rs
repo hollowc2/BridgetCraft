@@ -1,26 +1,15 @@
 use bevy::color::Mix;
-use bevy::core_pipeline::Skybox;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
-use crate::player::{Player, PlayerCamera, PlayerSettings, ShadowQuality};
+use crate::player::{Player, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
 
-pub(crate) const SKY_CUBEMAP: &str = "textures/sky_cubemap.png";
 const CELESTIAL_DISTANCE: f32 = 460.0;
 const CELESTIAL_SIZE: f32 = 52.0;
 const DAY_LENGTH_SECS: f32 = 480.0;
-const DAY_SKY_BRIGHTNESS: f32 = 1_000.0;
-const NIGHT_SKY_BRIGHTNESS: f32 = 140.0;
 
 const SUN_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/sun.png";
 const MOON_TEXTURE: &str = "kenney_voxel-pack/PNG/Other/moon.png";
-
-#[derive(Resource)]
-pub(crate) struct SkyCubemap {
-    image: Handle<Image>,
-    configured: bool,
-}
 
 #[derive(Resource)]
 pub(crate) struct DayNightCycle {
@@ -67,11 +56,6 @@ fn horizon_fade(elevation: f32) -> f32 {
     smoothstep(-0.04, 0.06, elevation)
 }
 
-fn sky_brightness(twilight: f32) -> f32 {
-    DAY_SKY_BRIGHTNESS + (NIGHT_SKY_BRIGHTNESS - DAY_SKY_BRIGHTNESS) * twilight * 0.9
-}
-
-/// World-space rotation for a directional light shining from `sun_dir` (ground → sun).
 fn directional_light_rotation(sun_dir: Vec3) -> Quat {
     let sun_dir = sun_dir.normalize_or_zero();
     if sun_dir.length_squared() < f32::EPSILON {
@@ -130,26 +114,12 @@ pub(crate) fn spawn_sun_and_ambient(commands: &mut Commands, settings: &PlayerSe
     });
 }
 
-pub(crate) fn initial_skybox(image: Handle<Image>) -> Skybox {
-    Skybox {
-        image,
-        brightness: sky_brightness(0.0),
-        ..default()
-    }
-}
-
 pub(crate) fn spawn_sky(
     commands: &mut Commands,
-    cubemap: Handle<Image>,
     asset_server: &Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(SkyCubemap {
-        image: cubemap,
-        configured: false,
-    });
-
     let sun_texture = asset_server.load(SUN_TEXTURE);
     let moon_texture = asset_server.load(MOON_TEXTURE);
 
@@ -199,61 +169,6 @@ pub(crate) fn spawn_sky(
         });
 }
 
-pub(crate) fn configure_sky_cubemap(
-    mut cubemap: ResMut<SkyCubemap>,
-    asset_server: Res<AssetServer>,
-    mut images: ResMut<Assets<Image>>,
-    mut cameras: Query<(Entity, Option<&mut Skybox>), With<PlayerCamera>>,
-    mut commands: Commands,
-) {
-    if cubemap.configured {
-        return;
-    }
-
-    if !asset_server.is_loaded_with_dependencies(&cubemap.image) {
-        return;
-    }
-
-    let Some(image) = images.get_mut(&cubemap.image) else {
-        return;
-    };
-
-    if image.texture_descriptor.array_layer_count() == 1 {
-        image
-            .reinterpret_stacked_2d_as_array(image.height() / image.width())
-            .expect("sky cubemap should be a vertical stack of square faces");
-        image.texture_view_descriptor = Some(TextureViewDescriptor {
-            dimension: Some(TextureViewDimension::Cube),
-            ..default()
-        });
-    }
-
-    let brightness = sky_brightness(0.0);
-    let mut configured_any = false;
-
-    for (entity, existing) in &mut cameras {
-        configured_any = true;
-        match existing {
-            Some(mut skybox) => {
-                skybox.image = cubemap.image.clone();
-                skybox.brightness = brightness;
-            }
-            None => {
-                commands.entity(entity).insert(Skybox {
-                    image: cubemap.image.clone(),
-                    brightness,
-                    ..default()
-                });
-            }
-        }
-    }
-
-    if configured_any {
-        cubemap.configured = true;
-        info!("sky cubemap ready");
-    }
-}
-
 pub(crate) fn follow_sky_to_player(
     players: Query<&Transform, With<Player>>,
     mut sky: Query<&mut Transform, (With<SkyRoot>, Without<Player>)>,
@@ -299,8 +214,6 @@ pub(crate) fn update_day_night(
         (&mut DirectionalLight, &mut Transform),
         (With<SunLight>, Without<CelestialBody>),
     >,
-    mut skyboxes: Query<&mut Skybox, With<PlayerCamera>>,
-    mut cached_brightness: Local<f32>,
 ) {
     cycle.phase = (cycle.phase + time.delta_secs() / DAY_LENGTH_SECS) % 1.0;
 
@@ -308,14 +221,6 @@ pub(crate) fn update_day_night(
     let moon_dir = moon_direction(cycle.phase);
     let daylight = sun_dir.y.clamp(0.0, 1.0);
     let twilight = 1.0 - smoothstep(0.0, 0.12, sun_dir.y);
-    let brightness = sky_brightness(twilight);
-
-    if (*cached_brightness - brightness).abs() > 0.5 {
-        *cached_brightness = brightness;
-        for mut skybox in &mut skyboxes {
-            skybox.brightness = brightness;
-        }
-    }
 
     for (mut light, mut transform) in &mut sun_lights {
         let active_dir = if sun_dir.y > 0.0 {
