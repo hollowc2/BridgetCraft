@@ -1,16 +1,10 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use bevy_voxel_world::custom_meshing::{CHUNK_SIZE_F, CHUNK_SIZE_U};
 use bevy_voxel_world::prelude::*;
 
 use crate::block::texture_index_table;
 use crate::world_gen::{terrain_lookup, ProceduralTerrain, WorldMetadata};
-
-const LOD_DISTANCE_FRACTION_NEAR: f32 = 0.45;
-const LOD_DISTANCE_FRACTION_MID: f32 = 0.75;
-const LOD_HYSTERESIS: f32 = 0.08;
-const MIN_CHUNK_INTERIOR: u32 = 8;
 
 #[derive(Resource, Clone)]
 pub struct BridgetWorld {
@@ -84,66 +78,6 @@ impl VoxelWorldConfig for BridgetWorld {
     fn max_spawn_per_frame(&self) -> usize {
         self.max_spawn_per_frame
     }
-
-    fn chunk_lod(
-        &self,
-        chunk_position: IVec3,
-        previous_lod: Option<LodLevel>,
-        camera_position: Vec3,
-    ) -> LodLevel {
-        let chunk_center =
-            chunk_position.as_vec3() * CHUNK_SIZE_F + Vec3::splat(CHUNK_SIZE_F * 0.5);
-        let distance = chunk_center.distance(camera_position);
-        let render_extent = self.spawning_distance as f32 * CHUNK_SIZE_F;
-        let near_cutoff = render_extent * LOD_DISTANCE_FRACTION_NEAR;
-        let mid_cutoff = render_extent * LOD_DISTANCE_FRACTION_MID;
-
-        let target = if distance >= mid_cutoff {
-            2
-        } else if distance >= near_cutoff {
-            1
-        } else {
-            0
-        };
-
-        match previous_lod {
-            Some(previous) if previous > target => {
-                let threshold = match target {
-                    0 => near_cutoff * (1.0 - LOD_HYSTERESIS),
-                    1 => mid_cutoff * (1.0 - LOD_HYSTERESIS),
-                    _ => f32::MAX,
-                };
-                if distance < threshold {
-                    previous
-                } else {
-                    target
-                }
-            }
-            Some(previous) if previous < target => {
-                let threshold = match target {
-                    1 => near_cutoff * (1.0 + LOD_HYSTERESIS),
-                    2 => mid_cutoff * (1.0 + LOD_HYSTERESIS),
-                    _ => 0.0,
-                };
-                if distance > threshold {
-                    previous
-                } else {
-                    target
-                }
-            }
-            _ => target,
-        }
-    }
-
-    fn chunk_data_shape(&self, lod_level: LodLevel) -> UVec3 {
-        let shift = lod_level.min(2);
-        let interior = (CHUNK_SIZE_U >> shift).max(MIN_CHUNK_INTERIOR);
-        padded_chunk_shape_uniform(interior)
-    }
-
-    fn chunk_meshing_shape(&self, lod_level: LodLevel) -> UVec3 {
-        self.chunk_data_shape(lod_level)
-    }
 }
 
 pub struct VoxelConfigPlugin;
@@ -191,13 +125,19 @@ fn tune_chunk_spawn_budget(
     mut budget: ResMut<FrameBudget>,
     mut config: ResMut<BridgetWorld>,
 ) {
+    // Hold the initial spawn budget during startup meshing; aggressive throttling to 8
+    // left most chunks without meshes for a long time.
+    if time.elapsed_secs() < 12.0 {
+        return;
+    }
+
     let frame_ms = time.delta_secs() * 1000.0;
     budget.ema_ms = budget.ema_ms * 0.92 + frame_ms * 0.08;
 
     let target_ms = 16.0;
     let current = config.max_spawn_per_frame;
 
-    if budget.ema_ms > target_ms * 1.25 && current > 8 {
+    if budget.ema_ms > target_ms * 1.25 && current > 16 {
         config.max_spawn_per_frame = current.saturating_sub(4);
     } else if budget.ema_ms < target_ms * 0.75 && current < 48 {
         config.max_spawn_per_frame = (current + 2).min(48);

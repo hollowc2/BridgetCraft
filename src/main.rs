@@ -27,8 +27,9 @@ use interaction::{
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
-    apply_render_settings, find_spawn_position, grab_cursor, mouse_look, player_movement,
-    release_cursor, spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
+    apply_render_settings, apply_render_settings_on_enter, find_spawn_position, grab_cursor,
+    mouse_look, player_movement, release_cursor, spawn_player, sync_player_camera, FlyActivation,
+    GravityMode, PlayerSettings,
     VsyncMode,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
@@ -58,8 +59,10 @@ pub enum AppState {
 fn main() {
     // When the binary is launched directly (not via `cargo run`), Bevy otherwise resolves
     // assets next to the executable (`target/debug/assets/`) instead of the project folder.
-    if std::env::var("BEVY_ASSET_ROOT").is_err() && std::env::var("CARGO_MANIFEST_DIR").is_err() {
-        std::env::set_var("BEVY_ASSET_ROOT", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var("BEVY_ASSET_ROOT").is_err() {
+        let root = std::env::var("CARGO_MANIFEST_DIR")
+            .unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_string());
+        std::env::set_var("BEVY_ASSET_ROOT", root);
     }
 
     let mut app = App::new();
@@ -129,6 +132,7 @@ fn main() {
             grab_cursor,
             sync_world_seed,
             setup_world,
+            apply_render_settings_on_enter,
             show_host_message,
         )
             .chain(),
@@ -137,7 +141,7 @@ fn main() {
         OnExit(AppState::InGame),
         (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
     )
-    .add_systems(Update, (toggle_performance_overlay, debug_render_stats))
+    .add_systems(Update, toggle_performance_overlay)
     .add_systems(
         Update,
         (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
@@ -218,7 +222,7 @@ fn setup_world(
     let spawn = find_spawn_position(&terrain);
     let player_name = menu_player_name(&menu_settings);
 
-    let (player, _camera) = spawn_player(&mut commands, &player_name, spawn);
+    let (player, _camera) = spawn_player(&mut commands, &player_name, spawn, &settings);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {
@@ -234,6 +238,15 @@ fn setup_world(
     }
 
     spawn_hud(&mut commands);
+
+    let atlas_path = std::path::Path::new("assets/textures/voxel_atlas.png");
+    if !atlas_path.exists() {
+        warn!(
+            "missing {}; run `cargo build` to generate textures from Kenney tiles",
+            atlas_path.display()
+        );
+    }
+
     info!("world '{}' ready (seed {})", metadata.name, metadata.seed);
 }
 
@@ -317,31 +330,6 @@ fn settings_ui(
                 ui.label("Space rises, Shift descends.");
             }
         });
-}
-
-// TEMP: diagnostic logging to track down startup hitching. Remove when fixed.
-fn debug_render_stats(
-    time: Res<Time>,
-    mut last: Local<f32>,
-    config: Res<BridgetWorld>,
-    chunks: Query<(), With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
-    chunk_meshes: Query<(), (With<Mesh3d>, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>)>,
-    all_meshes: Query<(), With<Mesh3d>>,
-) {
-    let now = time.elapsed_secs();
-    if now - *last < 1.0 {
-        return;
-    }
-    *last = now;
-
-    info!(
-        "DBG t={now:.1}s chunks={} chunk_meshes={} all_meshes={} spawn_budget={} fps~{:.1}",
-        chunks.iter().count(),
-        chunk_meshes.iter().count(),
-        all_meshes.iter().count(),
-        config.max_spawn_per_frame,
-        1.0 / time.delta_secs().max(0.0001),
-    );
 }
 
 fn toggle_performance_overlay(

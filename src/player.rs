@@ -168,10 +168,18 @@ impl Default for PlayerSettings {
     }
 }
 
+fn effective_msaa(msaa: Msaa) -> Msaa {
+    match msaa {
+        Msaa::Off => Msaa::Sample4,
+        other => other,
+    }
+}
+
 pub fn spawn_player(
     commands: &mut Commands,
     name: &str,
     position: Vec3,
+    settings: &PlayerSettings,
 ) -> (Entity, Entity) {
     let camera_rotation = Quat::from_rotation_x(INITIAL_LOOK_PITCH);
     let eye_position = position + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
@@ -188,9 +196,8 @@ pub fn spawn_player(
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.53, 0.75, 0.92).into()),
                 ..default()
             },
-            // NOTE: Do not add `Msaa::Off` here. bevy_voxel_world's chunk material pipeline
-            // renders nothing when MSAA is disabled on this camera, leaving only the clear
-            // color. Keep the default MSAA (Sample4) so terrain is visible.
+            // MSAA Off breaks bevy_voxel_world chunk rendering; always spawn with 2x/4x MSAA.
+            effective_msaa(settings.msaa),
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
@@ -567,21 +574,38 @@ pub fn find_spawn_position(terrain: &ProceduralTerrain) -> Vec3 {
     Vec3::new(0.5, height as f32 + 1.0, 0.5)
 }
 
-pub fn apply_render_settings(
+pub fn apply_render_settings_on_enter(
     settings: Res<PlayerSettings>,
     mut windows: Query<&mut Window>,
     mut cameras: Query<&mut Msaa, With<PlayerCamera>>,
+) {
+    let present_mode = settings.vsync_mode.present_mode();
+    for mut window in &mut windows {
+        window.present_mode = present_mode;
+    }
+
+    let msaa = effective_msaa(settings.msaa);
+    for mut camera_msaa in &mut cameras {
+        *camera_msaa = msaa;
+    }
+}
+
+pub fn apply_render_settings(
+    settings: Res<PlayerSettings>,
+    windows: Query<&mut Window>,
+    cameras: Query<&mut Msaa, With<PlayerCamera>>,
 ) {
     if !settings.is_changed() {
         return;
     }
 
     let present_mode = settings.vsync_mode.present_mode();
-    for mut window in &mut windows {
+    for mut window in windows {
         window.present_mode = present_mode;
     }
 
-    for mut msaa in &mut cameras {
-        *msaa = settings.msaa;
+    let msaa = effective_msaa(settings.msaa);
+    for mut camera_msaa in cameras {
+        *camera_msaa = msaa;
     }
 }
