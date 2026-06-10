@@ -24,8 +24,8 @@ use interaction::{
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
-    find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor,
-    spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
+    find_spawn_position, grab_cursor, mouse_look, player_movement, propagate_player_camera_global,
+    release_cursor, spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -84,7 +84,7 @@ fn main() {
         .add_plugins(GameAudioPlugin)
         .add_systems(
             PreUpdate,
-            sync_player_camera.run_if(in_state(AppState::InGame)),
+            propagate_player_camera_global.run_if(in_state(AppState::InGame)),
         )
         .add_plugins(VoxelConfigPlugin)
         .add_plugins(NetworkPlugin)
@@ -148,10 +148,11 @@ fn main() {
                 sync_world_seed,
                 mouse_look,
                 sync_player_camera.after(mouse_look),
-                follow_sky_to_player.after(sync_player_camera),
+                player_movement.after(sync_player_camera),
+                propagate_player_camera_global.after(player_movement),
+                follow_sky_to_player.after(propagate_player_camera_global),
                 update_celestial_bodies.after(follow_sky_to_player),
-                player_movement,
-                update_block_target,
+                update_block_target.after(propagate_player_camera_global),
                 handle_block_interaction,
                 hotbar_scroll,
                 update_hotbar_text,
