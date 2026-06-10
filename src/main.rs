@@ -137,7 +137,7 @@ fn main() {
         OnExit(AppState::InGame),
         (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
     )
-    .add_systems(Update, toggle_performance_overlay)
+    .add_systems(Update, (toggle_performance_overlay, debug_render_stats))
     .add_systems(
         Update,
         (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
@@ -265,13 +265,12 @@ fn settings_ui(
             });
             ui.horizontal(|ui| {
                 ui.label("MSAA:");
+                // MSAA Off breaks bevy_voxel_world chunk rendering; offer 2x/4x only.
                 for samples in [
-                    bevy::render::view::Msaa::Off,
                     bevy::render::view::Msaa::Sample2,
                     bevy::render::view::Msaa::Sample4,
                 ] {
                     let label = match samples {
-                        bevy::render::view::Msaa::Off => "Off",
                         bevy::render::view::Msaa::Sample2 => "2x",
                         bevy::render::view::Msaa::Sample4 => "4x",
                         _ => "Other",
@@ -318,6 +317,31 @@ fn settings_ui(
                 ui.label("Space rises, Shift descends.");
             }
         });
+}
+
+// TEMP: diagnostic logging to track down startup hitching. Remove when fixed.
+fn debug_render_stats(
+    time: Res<Time>,
+    mut last: Local<f32>,
+    config: Res<BridgetWorld>,
+    chunks: Query<(), With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
+    chunk_meshes: Query<(), (With<Mesh3d>, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>)>,
+    all_meshes: Query<(), With<Mesh3d>>,
+) {
+    let now = time.elapsed_secs();
+    if now - *last < 1.0 {
+        return;
+    }
+    *last = now;
+
+    info!(
+        "DBG t={now:.1}s chunks={} chunk_meshes={} all_meshes={} spawn_budget={} fps~{:.1}",
+        chunks.iter().count(),
+        chunk_meshes.iter().count(),
+        all_meshes.iter().count(),
+        config.max_spawn_per_frame,
+        1.0 / time.delta_secs().max(0.0001),
+    );
 }
 
 fn toggle_performance_overlay(

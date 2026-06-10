@@ -162,7 +162,7 @@ impl Default for PlayerSettings {
             show_diagnostics: false,
             gravity_mode: GravityMode::Normal,
             fly_activation: FlyActivation::Off,
-            msaa: Msaa::Off,
+            msaa: Msaa::Sample4,
             vsync_mode: VsyncMode::On,
         }
     }
@@ -188,7 +188,9 @@ pub fn spawn_player(
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.53, 0.75, 0.92).into()),
                 ..default()
             },
-            Msaa::Off,
+            // NOTE: Do not add `Msaa::Off` here. bevy_voxel_world's chunk material pipeline
+            // renders nothing when MSAA is disabled on this camera, leaving only the clear
+            // color. Keep the default MSAA (Sample4) so terrain is visible.
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),

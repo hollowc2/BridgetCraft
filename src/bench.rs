@@ -42,7 +42,9 @@ impl Plugin for BenchPlugin {
         let bench = args.bench;
         let bench_duration = args.bench_duration;
 
-        if args.diag_log || bench {
+        if (args.diag_log || bench)
+            && !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>()
+        {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
 
