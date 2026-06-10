@@ -14,7 +14,7 @@ mod world_gen;
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::prelude::*;
 use bevy::window::PresentMode;
-use bevy_egui::EguiPlugin;
+use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
 use bevy_voxel_world::prelude::*;
 
 use audio::GameAudioPlugin;
@@ -28,9 +28,8 @@ use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
     apply_render_settings, apply_render_settings_on_enter, find_spawn_position, grab_cursor,
-    mouse_look, player_movement, release_cursor, spawn_player, sync_player_camera, FlyActivation,
-    GravityMode, PlayerSettings,
-    VsyncMode,
+    lead_chunk_spawn_anchor, mouse_look, player_movement, release_cursor, spawn_chunk_anchor,
+    spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings, VsyncMode,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -41,6 +40,13 @@ use ui::menu::{
 };
 use ui::game_menu::{
     cleanup_world, game_menu_button_interaction, menu_closed, toggle_game_menu, GameMenuOpen,
+};
+use ui::loading::{
+    begin_world_load, cleanup_loading_overlay, spawn_loading_overlay, update_loading_progress,
+    WorldLoadState,
+};
+use ui::menu_splash::{
+    cleanup_menu_splash, rotate_menu_splash, spawn_menu_splash,
 };
 use voxel_config::{sync_world_seed, BridgetWorld, VoxelConfigPlugin};
 use sky::{
@@ -77,7 +83,17 @@ fn main() {
             ..default()
         }),
     )
-    .add_plugins(EguiPlugin::default())
+    .insert_resource(EguiGlobalSettings {
+        auto_create_primary_context: false,
+        ..default()
+    })
+    .add_plugins(EguiPlugin {
+        // Single-pass mode avoids duplicate EguiPrimaryContextPass panics when multiple
+        // cameras exist (menu splash Camera3d + UI Camera2d).
+        #[allow(deprecated)]
+        enable_multipass_for_primary_context: false,
+        ..default()
+    })
     .add_plugins(FpsOverlayPlugin {
         config: FpsOverlayConfig {
             enabled: false,
@@ -93,7 +109,12 @@ fn main() {
     .add_plugins(SavePlugin)
     .add_systems(
         PreUpdate,
-        sync_player_camera.run_if(in_state(AppState::InGame)),
+        (
+            sync_player_camera,
+            lead_chunk_spawn_anchor,
+        )
+            .chain()
+            .run_if(in_state(AppState::InGame)),
     )
     .add_plugins(VoxelConfigPlugin)
     .add_plugins(NetworkPlugin)
@@ -110,10 +131,14 @@ fn main() {
     .init_resource::<SaveTimer>()
     .init_resource::<DayNightCycle>()
     .init_resource::<GameMenuOpen>()
+    .init_resource::<WorldLoadState>()
     .insert_resource(Time::<Fixed>::from_hz(60.0))
     .add_systems(Startup, setup_ui_camera)
-    .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
-    .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
+    .add_systems(
+        OnEnter(AppState::MainMenu),
+        (release_cursor, spawn_menu_splash, spawn_main_menu),
+    )
+    .add_systems(OnExit(AppState::MainMenu), (cleanup_menu, cleanup_menu_splash))
     .add_systems(
         Update,
         (
@@ -127,19 +152,31 @@ fn main() {
             .run_if(in_state(AppState::MainMenu)),
     )
     .add_systems(
+        Update,
+        rotate_menu_splash.run_if(in_state(AppState::MainMenu)),
+    )
+    .add_systems(
         OnEnter(AppState::InGame),
         (
             grab_cursor,
             sync_world_seed,
+            begin_world_load,
             setup_world,
             apply_render_settings_on_enter,
             show_host_message,
+            spawn_loading_overlay,
         )
             .chain(),
     )
     .add_systems(
         OnExit(AppState::InGame),
-        (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
+        (
+            flush_pending_block_edits,
+            cleanup_world,
+            cleanup_loading_overlay,
+            release_cursor,
+        )
+            .chain(),
     )
     .add_systems(Update, (toggle_performance_overlay, warn_if_voxel_atlas_failed))
     .add_systems(
@@ -165,13 +202,20 @@ fn main() {
             apply_render_settings,
             update_day_night,
             sync_diagnostics_overlay,
-            settings_ui,
         )
-            .run_if(in_state(AppState::InGame).and(menu_closed)),
+            .run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
+    )
+    .add_systems(
+        EguiPrimaryContextPass,
+        settings_ui.run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
+    )
+    .add_systems(
+        Update,
+        update_loading_progress.run_if(in_state(AppState::InGame)),
     )
     .add_systems(
         FixedUpdate,
-        player_movement.run_if(in_state(AppState::InGame).and(menu_closed)),
+        player_movement.run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
     )
     .add_systems(
         PostUpdate,
@@ -197,6 +241,7 @@ fn setup_ui_camera(mut commands: Commands) {
         UiCamera,
         Camera2d,
         IsDefaultUiCamera,
+        PrimaryEguiContext,
         Camera {
             order: 10,
             clear_color: ClearColorConfig::None,
@@ -226,6 +271,7 @@ fn setup_world(
     let player_name = menu_player_name(&menu_settings);
 
     let (player, _camera) = spawn_player(&mut commands, &player_name, spawn, &settings);
+    spawn_chunk_anchor(&mut commands, spawn);
     commands.entity(player).insert((
         BlockTarget::default(),
         net::replicate::NetworkPlayer {
@@ -373,6 +419,10 @@ fn toggle_performance_overlay(
     let enabled = settings.show_diagnostics;
     overlay.enabled = enabled;
     overlay.frame_time_graph_config.enabled = enabled;
+}
+
+fn not_loading(load_state: Res<WorldLoadState>) -> bool {
+    !load_state.active
 }
 
 fn sync_diagnostics_overlay(

@@ -339,6 +339,7 @@ pub fn cleanup_world(
     menu: Query<Entity, With<GameMenuRoot>>,
     players: Query<Entity, With<Player>>,
     cameras: Query<Entity, With<PlayerCamera>>,
+    chunk_anchors: Query<Entity, With<crate::player::ChunkSpawnAnchor>>,
     remote_players: Query<Entity, With<RemotePlayerBody>>,
     world_scene: Query<Entity, With<WorldScene>>,
     chunks: Query<Entity, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
@@ -352,6 +353,7 @@ pub fn cleanup_world(
         .chain(hud.iter())
         .chain(players.iter())
         .chain(cameras.iter())
+        .chain(chunk_anchors.iter())
         .chain(remote_players.iter())
         .chain(world_scene.iter())
         .chain(chunks.iter())

@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_voxel_world::prelude::*;
 
 use crate::block::texture_index_table;
+use crate::player::PlayerController;
 use crate::world_gen::{terrain_lookup, ProceduralTerrain, WorldMetadata};
 
 #[derive(Resource, Clone)]
@@ -124,22 +125,34 @@ fn tune_chunk_spawn_budget(
     time: Res<Time>,
     mut budget: ResMut<FrameBudget>,
     mut config: ResMut<BridgetWorld>,
+    players: Query<&PlayerController, With<crate::player::Player>>,
 ) {
-    // Hold the initial spawn budget during startup meshing; aggressive throttling to 8
-    // left most chunks without meshes for a long time.
-    if time.elapsed_secs() < 12.0 {
-        return;
-    }
+    let player_speed = players
+        .single()
+        .map(|controller| Vec2::new(controller.velocity.x, controller.velocity.z).length())
+        .unwrap_or(0.0);
 
     let frame_ms = time.delta_secs() * 1000.0;
     budget.ema_ms = budget.ema_ms * 0.92 + frame_ms * 0.08;
 
     let target_ms = 16.0;
-    let current = config.max_spawn_per_frame;
+    let mut current = config.max_spawn_per_frame;
 
-    if budget.ema_ms > target_ms * 1.25 && current > 16 {
-        config.max_spawn_per_frame = current.saturating_sub(4);
-    } else if budget.ema_ms < target_ms * 0.75 && current < 48 {
-        config.max_spawn_per_frame = (current + 2).min(48);
+    // Hold the initial spawn budget during startup meshing; aggressive throttling to 8
+    // left most chunks without meshes for a long time.
+    if time.elapsed_secs() >= 12.0 {
+        if budget.ema_ms > target_ms * 1.25 && current > 16 {
+            current = current.saturating_sub(4);
+        } else if budget.ema_ms < target_ms * 0.75 && current < 48 {
+            current = (current + 2).min(48);
+        }
     }
+
+    if player_speed > 3.0 {
+        current = (current + 8).min(56);
+    } else if player_speed > 1.0 {
+        current = (current + 4).min(48);
+    }
+
+    config.max_spawn_per_frame = current;
 }

@@ -7,6 +7,8 @@ use bevy_voxel_world::prelude::*;
 use crate::audio::{spatial_audio_listener, GameAudio};
 use crate::block::BlockId;
 use crate::gamepad::select_primary;
+use crate::interaction::PendingBlockEdits;
+use crate::save::WorldEdits;
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::ProceduralTerrain;
 
@@ -28,6 +30,9 @@ pub struct Player;
 
 #[derive(Component)]
 pub struct PlayerCamera;
+
+#[derive(Component)]
+pub struct ChunkSpawnAnchor;
 
 #[derive(Component, Default)]
 pub struct PlayerController {
@@ -200,7 +205,6 @@ pub fn spawn_player(
             effective_msaa(settings.msaa),
             PlayerCamera,
             spatial_audio_listener(),
-            VoxelWorldCamera::<BridgetWorld>::default(),
             camera_transform,
             GlobalTransform::from(camera_transform),
         ))
@@ -220,6 +224,63 @@ pub fn spawn_player(
         .id();
 
     (player, camera)
+}
+
+pub fn spawn_chunk_anchor(commands: &mut Commands, position: Vec3) -> Entity {
+    let rotation = Quat::from_rotation_x(INITIAL_LOOK_PITCH);
+    let eye = position + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    let forward = Vec3::new(0.0, 0.0, -1.0);
+    let transform = Transform::from_translation(eye + forward * 6.0).with_rotation(rotation);
+
+    commands
+        .spawn((
+            ChunkSpawnAnchor,
+            // bevy_voxel_world only considers entities with both VoxelWorldCamera and Camera.
+            Camera3d::default(),
+            Camera {
+                is_active: false,
+                ..default()
+            },
+            VoxelWorldCamera::<BridgetWorld>::default(),
+            transform,
+            GlobalTransform::from(transform),
+        ))
+        .id()
+}
+
+pub fn lead_chunk_spawn_anchor(
+    players: Query<(&Transform, &PlayerController), With<Player>>,
+    mut anchors: Query<
+        (&mut Transform, &mut GlobalTransform),
+        (With<ChunkSpawnAnchor>, Without<Player>),
+    >,
+) {
+    let Ok((player, controller)) = players.single() else {
+        return;
+    };
+    let Ok((mut transform, mut global)) = anchors.single_mut() else {
+        return;
+    };
+
+    let forward = Vec3::new(-controller.yaw.sin(), 0.0, -controller.yaw.cos());
+    let velocity = Vec3::new(controller.velocity.x, 0.0, controller.velocity.z);
+    let speed = velocity.length();
+    let lead_distance = if speed > 0.5 {
+        (speed * 0.75).clamp(4.0, 16.0)
+    } else {
+        0.0
+    };
+    let lead = if lead_distance > 0.0 {
+        velocity.normalize_or_zero() * lead_distance
+    } else {
+        forward * 6.0
+    };
+
+    let eye = player.translation + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    transform.translation = eye + lead;
+    transform.rotation =
+        Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
+    *global = GlobalTransform::from(*transform);
 }
 
 pub fn sync_player_camera(
@@ -294,6 +355,8 @@ pub fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
     terrain: Res<ProceduralTerrain>,
+    edits: Res<WorldEdits>,
+    pending: Res<PendingBlockEdits>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
     mut audio: ResMut<GameAudio>,
@@ -345,6 +408,15 @@ pub fn player_movement(
     }
 
     let chunk_get_voxel = voxel_world.get_voxel_fn();
+    let resolve = |pos: IVec3| {
+        resolve_voxel(
+            chunk_get_voxel.as_ref(),
+            &terrain,
+            &edits,
+            &pending,
+            pos,
+        )
+    };
 
     let fly_active =
         settings.fly_activation == FlyActivation::Always || controller.flying;
@@ -365,17 +437,12 @@ pub fn player_movement(
         }
         if wish_dir != Vec3::ZERO {
             let delta = wish_dir.normalize() * FLY_SPEED * time.delta_secs();
-            move_by_delta(
-                &mut transform.translation,
-                delta,
-                chunk_get_voxel.as_ref(),
-                &terrain,
-            );
+            move_by_delta(&mut transform.translation, delta, &resolve);
         }
-        recover_if_below_surface(&mut transform, &terrain, chunk_get_voxel.as_ref());
+        recover_if_below_surface(&mut transform, &terrain, &resolve);
 
         if settings.fly_activation == FlyActivation::DoubleTap
-            && is_grounded(transform.translation, chunk_get_voxel.as_ref(), &terrain)
+            && is_grounded(transform.translation, &resolve)
         {
             controller.flying = false;
             controller.grounded = true;
@@ -406,11 +473,10 @@ pub fn player_movement(
     move_with_collision(
         &mut transform,
         &mut controller,
-        chunk_get_voxel.as_ref(),
-        &terrain,
+        &resolve,
         time.delta_secs(),
     );
-    recover_if_below_surface(&mut transform, &terrain, chunk_get_voxel.as_ref());
+    recover_if_below_surface(&mut transform, &terrain, &resolve);
 
     let moving = Vec2::new(controller.velocity.x, controller.velocity.z).length() > 0.5;
     if controller.grounded && moving {
@@ -432,8 +498,17 @@ pub fn player_movement(
 fn resolve_voxel(
     chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
     terrain: &ProceduralTerrain,
+    edits: &WorldEdits,
+    pending: &PendingBlockEdits,
     pos: IVec3,
 ) -> WorldVoxel<u8> {
+    if let Some(voxel) = pending.get_voxel(pos) {
+        return voxel;
+    }
+    if let Some(voxel) = edits.get_voxel(pos) {
+        return voxel;
+    }
+
     let voxel = chunk_get_voxel(pos);
     if voxel == WorldVoxel::Unset {
         terrain.voxel_at(pos)
@@ -445,8 +520,7 @@ fn resolve_voxel(
 fn move_by_delta(
     position: &mut Vec3,
     delta: Vec3,
-    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
-    terrain: &ProceduralTerrain,
+    resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>,
 ) {
     let mut new_pos = *position;
 
@@ -456,7 +530,7 @@ fn move_by_delta(
             continue;
         }
         let candidate = new_pos + movement;
-        if !collides(candidate, chunk_get_voxel, terrain) {
+        if !collides(candidate, resolve) {
             new_pos = candidate;
         }
     }
@@ -467,22 +541,20 @@ fn move_by_delta(
 fn recover_if_below_surface(
     transform: &mut Transform,
     terrain: &ProceduralTerrain,
-    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>,
 ) {
     let x = transform.translation.x.floor() as i32;
     let z = transform.translation.z.floor() as i32;
     let min_feet_y = terrain.surface_height(x, z) as f32 + 1.0;
 
-    if transform.translation.y >= min_feet_y
-        && !collides(transform.translation, chunk_get_voxel, terrain)
-    {
+    if transform.translation.y >= min_feet_y && !collides(transform.translation, resolve) {
         return;
     }
 
     transform.translation.y = min_feet_y;
     for offset in 0..=6 {
         let candidate = transform.translation + Vec3::new(0.0, offset as f32, 0.0);
-        if !collides(candidate, chunk_get_voxel, terrain) {
+        if !collides(candidate, resolve) {
             transform.translation = candidate;
             return;
         }
@@ -492,8 +564,7 @@ fn recover_if_below_surface(
 fn move_with_collision(
     transform: &mut Transform,
     controller: &mut PlayerController,
-    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
-    terrain: &ProceduralTerrain,
+    resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>,
     dt: f32,
 ) {
     let velocity = controller.velocity * dt;
@@ -505,7 +576,7 @@ fn move_with_collision(
             continue;
         }
         let candidate = new_pos + movement;
-        if !collides(candidate, chunk_get_voxel, terrain) {
+        if !collides(candidate, resolve) {
             new_pos = candidate;
         } else if axis == Vec3::Y && movement.y < 0.0 {
             controller.grounded = true;
@@ -519,26 +590,17 @@ fn move_with_collision(
     }
 
     transform.translation = new_pos;
-    controller.grounded =
-        controller.grounded || is_grounded(new_pos, chunk_get_voxel, terrain);
+    controller.grounded = controller.grounded || is_grounded(new_pos, resolve);
 }
 
-fn collides(
-    position: Vec3,
-    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
-    terrain: &ProceduralTerrain,
-) -> bool {
+fn collides(position: Vec3, resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>) -> bool {
     let min = position + Vec3::new(-PLAYER_RADIUS, 0.0, -PLAYER_RADIUS);
     let max = position + Vec3::new(PLAYER_RADIUS, PLAYER_HEIGHT, PLAYER_RADIUS);
 
     for x in (min.x.floor() as i32)..=(max.x.floor() as i32) {
         for y in (min.y.floor() as i32)..=(max.y.floor() as i32) {
             for z in (min.z.floor() as i32)..=(max.z.floor() as i32) {
-                if is_solid_voxel(resolve_voxel(
-                    chunk_get_voxel,
-                    terrain,
-                    IVec3::new(x, y, z),
-                )) {
+                if is_solid_voxel(resolve(IVec3::new(x, y, z))) {
                     return true;
                 }
             }
@@ -547,17 +609,9 @@ fn collides(
     false
 }
 
-fn is_grounded(
-    position: Vec3,
-    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
-    terrain: &ProceduralTerrain,
-) -> bool {
+fn is_grounded(position: Vec3, resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>) -> bool {
     let foot = position + Vec3::new(0.0, -0.05, 0.0);
-    is_solid_voxel(resolve_voxel(
-        chunk_get_voxel,
-        terrain,
-        foot.floor().as_ivec3(),
-    ))
+    is_solid_voxel(resolve(foot.floor().as_ivec3()))
 }
 
 fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {

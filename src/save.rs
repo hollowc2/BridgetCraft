@@ -31,6 +31,10 @@ impl WorldEdits {
     pub fn len(&self) -> usize {
         self.edits.len()
     }
+
+    pub fn get_voxel(&self, pos: IVec3) -> Option<WorldVoxel<u8>> {
+        self.edits.get(&pos).map(|voxel| voxel.to_world_voxel())
+    }
 }
 
 #[derive(Serialize, Deserialize)]

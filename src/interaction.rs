@@ -30,6 +30,10 @@ impl PendingBlockEdits {
     pub fn queue(&mut self, pos: IVec3, voxel: WorldVoxel<u8>) {
         self.edits.insert(pos, voxel);
     }
+
+    pub fn get_voxel(&self, pos: IVec3) -> Option<WorldVoxel<u8>> {
+        self.edits.get(&pos).copied()
+    }
 }
 
 pub fn update_block_target(

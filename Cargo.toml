@@ -39,7 +39,13 @@ bevy = { version = "0.18", default-features = false, features = [
     "morph",
     "smaa_luts",
 ] }
-bevy_egui = "0.39"
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "default_fonts",
+    "manage_clipboard",
+    "open_url",
+    "render",
+    "bevy_ui",
+] }
 bevy_replicon = "0.40.3"
 bevy_replicon_renet = "0.16.0"
 bevy_voxel_world = "0.16"

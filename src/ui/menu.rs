@@ -1,4 +1,4 @@
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 
@@ -53,9 +53,6 @@ impl Default for MenuFocus {
 pub struct MenuRoot;
 
 #[derive(Component)]
-pub struct MenuSceneCamera;
-
-#[derive(Component)]
 pub struct MenuButton(&'static str);
 
 #[derive(Component)]
@@ -65,15 +62,6 @@ pub struct MenuTextInput(pub MenuInputField);
 pub struct MenuInputLabel;
 
 pub fn spawn_main_menu(mut commands: Commands, settings: Res<MenuSettings>) {
-    commands.spawn((
-        MenuSceneCamera,
-        Camera2d,
-        Camera {
-            order: 0,
-            ..default()
-        },
-    ));
-
     commands
         .spawn((
             MenuRoot,
@@ -86,7 +74,7 @@ pub fn spawn_main_menu(mut commands: Commands, settings: Res<MenuSettings>) {
                 row_gap: Val::Px(16.0),
                 ..Default::default()
             },
-            BackgroundColor(Color::srgb(0.08, 0.12, 0.18)),
+            BackgroundColor(Color::srgba(0.08, 0.12, 0.18, 0.72)),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -244,12 +232,13 @@ pub fn menu_input_keyboard(
             continue;
         }
 
-        let Some(text) = &event.text else {
+        let chars = menu_typed_characters(event);
+        if chars.is_empty() {
             continue;
-        };
+        }
 
         let value = menu_field_value_mut(&mut settings, active);
-        for ch in text.chars() {
+        for ch in chars {
             if value.len() >= max_len {
                 break;
             }
@@ -257,6 +246,17 @@ pub fn menu_input_keyboard(
                 value.push(ch);
             }
         }
+    }
+}
+
+fn menu_typed_characters(event: &KeyboardInput) -> Vec<char> {
+    if let Some(text) = &event.text {
+        return text.chars().filter(|ch| !ch.is_control()).collect();
+    }
+
+    match &event.logical_key {
+        Key::Character(text) => text.chars().filter(|ch| !ch.is_control()).collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -364,15 +364,8 @@ pub fn menu_button_interaction(
     }
 }
 
-pub fn cleanup_menu(
-    mut commands: Commands,
-    menu: Query<Entity, With<MenuRoot>>,
-    cameras: Query<Entity, With<MenuSceneCamera>>,
-) {
+pub fn cleanup_menu(mut commands: Commands, menu: Query<Entity, With<MenuRoot>>) {
     for entity in &menu {
-        commands.entity(entity).despawn();
-    }
-    for entity in &cameras {
         commands.entity(entity).despawn();
     }
 }
