@@ -210,7 +210,7 @@ pub(crate) fn configure_sky_cubemap(
         return;
     }
 
-    if !asset_server.load_state(&cubemap.image).is_loaded() {
+    if !asset_server.is_loaded_with_dependencies(&cubemap.image) {
         return;
     }
 

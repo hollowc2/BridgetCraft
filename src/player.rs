@@ -185,18 +185,24 @@ pub fn spawn_player(
 
 pub fn sync_player_camera(
     players: Query<(&Transform, &PlayerController), With<Player>>,
-    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut GlobalTransform),
+        (With<PlayerCamera>, Without<Player>),
+    >,
 ) {
     let Ok((player, controller)) = players.single() else {
         return;
     };
-    let Ok(mut camera) = cameras.single_mut() else {
+    let Ok((mut transform, mut global)) = cameras.single_mut() else {
         return;
     };
 
-    camera.translation = player.translation + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
-    camera.rotation =
+    transform.translation = player.translation + Vec3::new(0.0, PLAYER_HEIGHT - 0.2, 0.0);
+    transform.rotation =
         Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
+    // bevy_voxel_world casts chunk rays from GlobalTransform in PreUpdate, before Bevy's
+    // transform propagation runs, so keep the camera's global pose in sync here.
+    *global = GlobalTransform::from(*transform);
 }
 
 pub fn grab_cursor(mut cursor: Single<&mut CursorOptions>) {

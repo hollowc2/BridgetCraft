@@ -36,6 +36,10 @@ impl VoxelWorldConfig for BridgetWorld {
         2
     }
 
+    fn chunk_spawn_strategy(&self) -> ChunkSpawnStrategy {
+        ChunkSpawnStrategy::Close
+    }
+
     fn voxel_lookup_delegate(&self) -> VoxelLookupDelegate<Self::MaterialIndex> {
         terrain_lookup(self.terrain_lookup.clone())
     }

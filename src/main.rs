@@ -53,6 +53,12 @@ pub enum AppState {
 }
 
 fn main() {
+    // When the binary is launched directly (not via `cargo run`), Bevy otherwise resolves
+    // assets next to the executable (`target/debug/assets/`) instead of the project folder.
+    if std::env::var("BEVY_ASSET_ROOT").is_err() && std::env::var("CARGO_MANIFEST_DIR").is_err() {
+        std::env::set_var("BEVY_ASSET_ROOT", env!("CARGO_MANIFEST_DIR"));
+    }
+
     App::new()
         .add_plugins(
             DefaultPlugins.set(WindowPlugin {
