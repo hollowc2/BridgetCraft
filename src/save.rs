@@ -3,7 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy_voxel_world::prelude::WorldVoxel;
+use futures_lite::future;
 use serde::{Deserialize, Serialize};
 
 use crate::block::SavedVoxel;
@@ -35,6 +37,23 @@ impl WorldEdits {
 struct WorldSaveFile {
     metadata: WorldMetadata,
     edits: Vec<(IVec3, SavedVoxel)>,
+}
+
+#[derive(Resource, Default)]
+pub struct SaveStatus {
+    pub last_error: Option<String>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct PendingSaveTask(Option<Task<std::io::Result<()>>>);
+
+pub struct SavePlugin;
+
+impl Plugin for SavePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PendingSaveTask>();
+        app.init_resource::<SaveStatus>();
+    }
 }
 
 pub fn save_dir() -> PathBuf {
@@ -112,7 +131,7 @@ pub fn save_world(metadata: &WorldMetadata, edits: &WorldEdits) -> std::io::Resu
         metadata: metadata.clone(),
         edits: edits.iter().collect(),
     };
-    let json = serde_json::to_string_pretty(&save)?;
+    let json = serde_json::to_string(&save)?;
     fs::write(dir.join("world.json"), json)
 }
 
@@ -125,26 +144,65 @@ impl Default for SaveTimer {
     }
 }
 
+fn poll_async_save(pending: &mut PendingSaveTask, status: &mut SaveStatus) {
+    let Some(task) = pending.0.as_mut() else {
+        return;
+    };
+
+    if let Some(result) = future::block_on(future::poll_once(task)) {
+        pending.0 = None;
+        match result {
+            Ok(()) => status.last_error = None,
+            Err(err) => {
+                let message = err.to_string();
+                warn!("save failed: {message}");
+                status.last_error = Some(message);
+            }
+        }
+    }
+}
+
 pub fn auto_save_system(
     time: Res<Time>,
     mut timer: ResMut<SaveTimer>,
     metadata: Res<WorldMetadata>,
     edits: Res<WorldEdits>,
+    mut pending: ResMut<PendingSaveTask>,
+    mut status: ResMut<SaveStatus>,
 ) {
-    timer.0.tick(time.delta());
-    if timer.0.just_finished() {
-        if let Err(err) = save_world(&metadata, &edits) {
-            warn!("auto-save failed: {err}");
-        }
+    poll_async_save(&mut pending, &mut status);
+
+    if pending.0.is_some() {
+        return;
     }
+
+    timer.0.tick(time.delta());
+    if !timer.0.just_finished() {
+        return;
+    }
+
+    let metadata = metadata.clone();
+    let edits = edits.clone();
+    pending.0 = Some(AsyncComputeTaskPool::get().spawn(async move {
+        save_world(&metadata, &edits)
+    }));
 }
 
 pub fn save_on_exit(
     metadata: Res<WorldMetadata>,
     edits: Res<WorldEdits>,
+    mut pending: ResMut<PendingSaveTask>,
     mut exit_events: MessageReader<AppExit>,
 ) {
     for _ in exit_events.read() {
+        if let Some(task) = pending.0.take() {
+            match future::block_on(task) {
+                Ok(()) => {}
+                Err(err) => warn!("exit save failed: {err}"),
+            }
+            continue;
+        }
+
         if let Err(err) = save_world(&metadata, &edits) {
             warn!("exit save failed: {err}");
         }

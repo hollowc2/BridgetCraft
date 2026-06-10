@@ -3,13 +3,42 @@ name = "bridgetcraft"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+dynamic_linking = ["bevy/dynamic_linking"]
+trace_tracy = ["bevy/trace_tracy"]
+
 [build-dependencies]
 image = "0.25"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
-bevy = { version = "0.18", features = ["bevy_dev_tools"] }
+bevy = { version = "0.18", default-features = false, features = [
+    "default_app",
+    "default_platform",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_post_process",
+    "bevy_anti_alias",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_text",
+    "bevy_state",
+    "bevy_dev_tools",
+    "audio",
+    "png",
+    "tonemapping_luts",
+    "zstd_rust",
+    "bevy_light",
+    "bevy_mikktspace",
+    "ktx2",
+    "morph",
+    "smaa_luts",
+] }
 bevy_egui = "0.39"
 bevy_replicon = "0.40.3"
 bevy_replicon_renet = "0.16.0"
@@ -18,3 +47,19 @@ noise = "0.9.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 dashmap = "6.2.1"
+futures-lite = "2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.release.package."*"]
+codegen-units = 1

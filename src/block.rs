@@ -98,7 +98,29 @@ impl BlockId {
     }
 
     pub fn from_material(value: u8) -> Option<Self> {
-        BlockId::ALL.iter().copied().find(|block| block.as_material() == value)
+        match value {
+            0 => Some(BlockId::DirtGrass),
+            1 => Some(BlockId::Dirt),
+            2 => Some(BlockId::Stone),
+            3 => Some(BlockId::Sand),
+            4 => Some(BlockId::Wood),
+            5 => Some(BlockId::BrickRed),
+            6 => Some(BlockId::BrickGrey),
+            7 => Some(BlockId::Glass),
+            8 => Some(BlockId::Gravel),
+            9 => Some(BlockId::Clay),
+            10 => Some(BlockId::Snow),
+            11 => Some(BlockId::Leaves),
+            12 => Some(BlockId::Trunk),
+            13 => Some(BlockId::TrunkWhite),
+            14 => Some(BlockId::Water),
+            15 => Some(BlockId::Cobble),
+            16 => Some(BlockId::Planks),
+            17 => Some(BlockId::Wool),
+            18 => Some(BlockId::Glowstone),
+            19 => Some(BlockId::GrassDecor),
+            _ => None,
+        }
     }
 
     pub fn label(self) -> &'static str {
@@ -159,6 +181,18 @@ impl BlockId {
     pub fn to_world_voxel(self) -> WorldVoxel<u8> {
         WorldVoxel::Solid(self.as_material())
     }
+}
+
+/// Precomputed texture atlas indices per material id for O(1) meshing lookups.
+pub fn texture_index_table() -> &'static [[u32; 3]; 256] {
+    static TABLE: std::sync::OnceLock<[[u32; 3]; 256]> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = [[0u32; 3]; 256];
+        for block in BlockId::ALL {
+            table[block.as_material() as usize] = block.texture_indices();
+        }
+        table
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

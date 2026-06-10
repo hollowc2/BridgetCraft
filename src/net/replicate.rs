@@ -188,13 +188,36 @@ fn spawn_remote_player_visual(
 
 fn sync_local_player_network_data(
     selection: Res<crate::block::HotbarSelection>,
-    mut players: Query<(&Name, &Transform, &mut NetworkPlayer, &mut NetworkTransform), With<Player>>,
+    role: Res<crate::net::NetworkRole>,
+    mut players: Query<
+        (&Name, &Transform, &mut NetworkPlayer, &mut NetworkTransform),
+        With<Player>,
+    >,
 ) {
+    if matches!(*role, crate::net::NetworkRole::None) {
+        return;
+    }
+
+    let material = selection.selected_block().as_material();
+    let selection_changed = selection.is_changed();
+
     for (name, transform, mut network_player, mut network_transform) in &mut players {
-        network_player.name = name.as_str().to_string();
-        network_player.selected_block = selection.selected_block().as_material();
-        network_transform.translation = transform.translation.to_array();
-        network_transform.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        let name_str = name.as_str();
+        if network_player.name != name_str {
+            network_player.name = name_str.to_string();
+        }
+        if selection_changed {
+            network_player.selected_block = material;
+        }
+
+        let translation = transform.translation.to_array();
+        let yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+        if network_transform.translation != translation {
+            network_transform.translation = translation;
+        }
+        if (network_transform.yaw - yaw).abs() > f32::EPSILON {
+            network_transform.yaw = yaw;
+        }
     }
 }
 

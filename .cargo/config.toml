@@ -1,0 +1,4 @@
+# Optional fast linker (uncomment if mold or lld is installed):
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold", "-C", "target-cpu=native"]

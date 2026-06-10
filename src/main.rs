@@ -1,4 +1,5 @@
 mod audio;
+mod bench;
 mod block;
 mod gamepad;
 mod interaction;
@@ -12,10 +13,12 @@ mod world_gen;
 
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::prelude::*;
+use bevy::window::PresentMode;
 use bevy_egui::EguiPlugin;
 use bevy_voxel_world::prelude::*;
 
 use audio::GameAudioPlugin;
+use bench::BenchPlugin;
 use block::HotbarSelection;
 use interaction::{
     apply_pending_to_world, flush_pending_block_edits, handle_block_interaction,
@@ -24,10 +27,11 @@ use interaction::{
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
 use player::{
-    find_spawn_position, grab_cursor, mouse_look, player_movement, release_cursor, spawn_player,
-    sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
+    apply_render_settings, find_spawn_position, grab_cursor, mouse_look, player_movement,
+    release_cursor, spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings,
+    VsyncMode,
 };
-use save::{auto_save_system, load_world_edits, save_on_exit, SaveTimer, WorldEdits};
+use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
 use ui::menu::{
     cleanup_menu, menu_button_interaction, menu_input_display, menu_input_focus,
@@ -58,113 +62,124 @@ fn main() {
         std::env::set_var("BEVY_ASSET_ROOT", env!("CARGO_MANIFEST_DIR"));
     }
 
-    App::new()
-        .add_plugins(
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "BridgetCraft".into(),
-                    resolution: (1280, 720).into(),
-                    ..default()
-                }),
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "BridgetCraft".into(),
+                resolution: (1280, 720).into(),
+                present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
-        )
-        .add_plugins(EguiPlugin::default())
-        .add_plugins(FpsOverlayPlugin {
-            config: FpsOverlayConfig {
+            ..default()
+        }),
+    )
+    .add_plugins(EguiPlugin::default())
+    .add_plugins(FpsOverlayPlugin {
+        config: FpsOverlayConfig {
+            enabled: false,
+            frame_time_graph_config: bevy::dev_tools::fps_overlay::FrameTimeGraphConfig {
                 enabled: false,
-                frame_time_graph_config: bevy::dev_tools::fps_overlay::FrameTimeGraphConfig {
-                    enabled: false,
-                    ..default()
-                },
                 ..default()
             },
-        })
-        .add_plugins(GameAudioPlugin)
-        .add_systems(
-            PreUpdate,
-            sync_player_camera.run_if(in_state(AppState::InGame)),
+            ..default()
+        },
+    })
+    .add_plugins(BenchPlugin)
+    .add_plugins(GameAudioPlugin)
+    .add_plugins(SavePlugin)
+    .add_systems(
+        PreUpdate,
+        sync_player_camera.run_if(in_state(AppState::InGame)),
+    )
+    .add_plugins(VoxelConfigPlugin)
+    .add_plugins(NetworkPlugin)
+    .init_state::<AppState>()
+    .init_resource::<WorldMetadata>()
+    .init_resource::<ProceduralTerrain>()
+    .init_resource::<WorldEdits>()
+    .init_resource::<PendingBlockEdits>()
+    .init_resource::<HotbarSelection>()
+    .init_resource::<NetworkRole>()
+    .init_resource::<MenuSettings>()
+    .init_resource::<MenuFocus>()
+    .init_resource::<PlayerSettings>()
+    .init_resource::<SaveTimer>()
+    .init_resource::<DayNightCycle>()
+    .init_resource::<GameMenuOpen>()
+    .insert_resource(Time::<Fixed>::from_hz(60.0))
+    .add_systems(Startup, setup_ui_camera)
+    .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
+    .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
+    .add_systems(
+        Update,
+        (
+            menu_input_focus,
+            menu_input_keyboard,
+            menu_input_unfocus,
+            menu_input_display,
+            menu_button_interaction,
         )
-        .add_plugins(VoxelConfigPlugin)
-        .add_plugins(NetworkPlugin)
-        .init_state::<AppState>()
-        .init_resource::<WorldMetadata>()
-        .init_resource::<ProceduralTerrain>()
-        .init_resource::<WorldEdits>()
-        .init_resource::<PendingBlockEdits>()
-        .init_resource::<HotbarSelection>()
-        .init_resource::<NetworkRole>()
-        .init_resource::<MenuSettings>()
-        .init_resource::<MenuFocus>()
-        .init_resource::<PlayerSettings>()
-        .init_resource::<SaveTimer>()
-        .init_resource::<DayNightCycle>()
-        .init_resource::<GameMenuOpen>()
-        .add_systems(Startup, setup_ui_camera)
-        .add_systems(OnEnter(AppState::MainMenu), (release_cursor, spawn_main_menu))
-        .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
-        .add_systems(
-            Update,
-            (
-                menu_input_focus,
-                menu_input_keyboard,
-                menu_input_unfocus,
-                menu_input_display,
-                menu_button_interaction,
-            )
-                .chain()
-                .run_if(in_state(AppState::MainMenu)),
+            .chain()
+            .run_if(in_state(AppState::MainMenu)),
+    )
+    .add_systems(
+        OnEnter(AppState::InGame),
+        (
+            grab_cursor,
+            sync_world_seed,
+            setup_world,
+            show_host_message,
         )
-        .add_systems(
-            OnEnter(AppState::InGame),
-            (
-                grab_cursor,
-                sync_world_seed,
-                setup_world,
-                show_host_message,
-            )
-                .chain(),
+            .chain(),
+    )
+    .add_systems(
+        OnExit(AppState::InGame),
+        (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
+    )
+    .add_systems(Update, toggle_performance_overlay)
+    .add_systems(
+        Update,
+        (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
+    )
+    .add_systems(
+        Update,
+        (
+            sync_world_seed,
+            mouse_look,
+            sync_player_camera.after(mouse_look),
+            follow_sky_to_player,
+            update_celestial_bodies.after(follow_sky_to_player),
+            update_block_target.after(sync_player_camera),
+            handle_block_interaction,
+            hotbar_scroll,
+            update_hotbar_text,
+            update_network_info,
+            auto_save_system,
+            save_on_exit,
+            apply_shadow_settings,
+            apply_render_settings,
+            update_day_night,
+            sync_diagnostics_overlay,
+            settings_ui,
         )
-        .add_systems(
-            OnExit(AppState::InGame),
-            (flush_pending_block_edits, cleanup_world, release_cursor).chain(),
-        )
-        .add_systems(
-            Update,
-            toggle_performance_overlay,
-        )
-        .add_systems(
-            Update,
-            (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
-            (
-                sync_world_seed,
-                mouse_look,
-                sync_player_camera.after(mouse_look),
-                player_movement.after(sync_player_camera),
-                follow_sky_to_player.after(player_movement),
-                update_celestial_bodies.after(follow_sky_to_player),
-                update_block_target.after(sync_player_camera),
-                handle_block_interaction,
-                hotbar_scroll,
-                update_hotbar_text,
-                update_network_info,
-                auto_save_system,
-                save_on_exit,
-                apply_shadow_settings,
-                update_day_night,
-                sync_diagnostics_overlay,
-                settings_ui,
-            )
-                .run_if(in_state(AppState::InGame).and(menu_closed)),
-        )
-        .add_systems(
-            PostUpdate,
-            flush_pending_block_edits.run_if(in_state(AppState::InGame)),
-        )
-        .run();
+            .run_if(in_state(AppState::InGame).and(menu_closed)),
+    )
+    .add_systems(
+        FixedUpdate,
+        player_movement.run_if(in_state(AppState::InGame).and(menu_closed)),
+    )
+    .add_systems(
+        PostUpdate,
+        flush_pending_block_edits.run_if(in_state(AppState::InGame)),
+    );
+
+    #[cfg(feature = "trace_tracy")]
+    {
+        app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
+    }
+
+    app.run();
 }
 
 #[derive(Component)]
@@ -246,6 +261,28 @@ fn settings_ui(
                         quality,
                         quality.label(),
                     );
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("MSAA:");
+                for samples in [
+                    bevy::render::view::Msaa::Off,
+                    bevy::render::view::Msaa::Sample2,
+                    bevy::render::view::Msaa::Sample4,
+                ] {
+                    let label = match samples {
+                        bevy::render::view::Msaa::Off => "Off",
+                        bevy::render::view::Msaa::Sample2 => "2x",
+                        bevy::render::view::Msaa::Sample4 => "4x",
+                        _ => "Other",
+                    };
+                    ui.selectable_value(&mut settings.msaa, samples, label);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("VSync:");
+                for mode in VsyncMode::ALL {
+                    ui.selectable_value(&mut settings.vsync_mode, mode, mode.label());
                 }
             });
             ui.checkbox(

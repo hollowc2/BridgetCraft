@@ -99,6 +99,10 @@ pub fn spawn_hud(commands: &mut Commands) {
 }
 
 pub fn update_hotbar_text(selection: Res<HotbarSelection>, mut text: Single<&mut Text, With<HotbarText>>) {
+    if !selection.is_changed() {
+        return;
+    }
+
     let mut slots = String::new();
     for (index, block) in BlockId::HOTBAR.iter().enumerate() {
         let marker = if index == selection.index { '[' } else { ' ' };
@@ -154,6 +158,10 @@ pub fn update_network_info(
     settings: Res<PlayerSettings>,
     mut text: Single<&mut Text, With<NetworkInfoText>>,
 ) {
+    if !role.is_changed() && !settings.is_changed() {
+        return;
+    }
+
     let mut lines = vec![
         format!("Mode: {}", role.label()),
         format!("Render distance: {}", settings.render_distance),

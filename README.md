@@ -28,6 +28,25 @@ Release build (faster):
 cargo run --release
 ```
 
+Fast iteration (dynamic Bevy linking):
+
+```bash
+cargo run --features dynamic_linking
+```
+
+### Performance profiling
+
+```bash
+# Log frame-time stats to the terminal every second
+cargo run --release -- --diag-log
+
+# Automated benchmark: skip menu, render distance 6, scripted fly path
+cargo run --release -- --bench --bench-duration 30
+
+# Tracy flamegraphs (requires tracy profiler)
+cargo run --release --features trace_tracy
+```
+
 The build script generates `assets/textures/voxel_atlas.png` from Kenney tile PNGs automatically.
 
 ## Controls

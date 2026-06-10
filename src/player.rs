@@ -1,6 +1,7 @@
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions};
+use bevy::render::view::Msaa;
+use bevy::window::{CursorGrabMode, CursorOptions, PresentMode};
 use bevy_voxel_world::prelude::*;
 
 use crate::audio::{spatial_audio_listener, GameAudio};
@@ -113,6 +114,31 @@ impl FlyActivation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum VsyncMode {
+    #[default]
+    On,
+    Off,
+}
+
+impl VsyncMode {
+    pub const ALL: [Self; 2] = [Self::On, Self::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::On => "On",
+            Self::Off => "Off (benchmark)",
+        }
+    }
+
+    pub fn present_mode(self) -> PresentMode {
+        match self {
+            Self::On => PresentMode::AutoVsync,
+            Self::Off => PresentMode::AutoNoVsync,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct PlayerSettings {
     pub mouse_sensitivity: f32,
@@ -122,6 +148,8 @@ pub struct PlayerSettings {
     pub show_diagnostics: bool,
     pub gravity_mode: GravityMode,
     pub fly_activation: FlyActivation,
+    pub msaa: Msaa,
+    pub vsync_mode: VsyncMode,
 }
 
 impl Default for PlayerSettings {
@@ -130,10 +158,12 @@ impl Default for PlayerSettings {
             mouse_sensitivity: MOUSE_SENSITIVITY,
             gamepad_look_sensitivity: GAMEPAD_LOOK_SENSITIVITY,
             render_distance: 4,
-            shadow_quality: ShadowQuality::Off,
+            shadow_quality: ShadowQuality::Low,
             show_diagnostics: false,
             gravity_mode: GravityMode::Normal,
             fly_activation: FlyActivation::Off,
+            msaa: Msaa::Off,
+            vsync_mode: VsyncMode::On,
         }
     }
 }
@@ -158,9 +188,7 @@ pub fn spawn_player(
                 clear_color: ClearColorConfig::Custom(Color::srgb(0.53, 0.75, 0.92).into()),
                 ..default()
             },
-            // NOTE: Do not add `Msaa::Off` here. bevy_voxel_world's chunk material pipeline
-            // renders nothing when MSAA is disabled on this camera, leaving only the blue
-            // clear color. Keep the default MSAA so terrain is visible.
+            Msaa::Off,
             PlayerCamera,
             spatial_audio_listener(),
             VoxelWorldCamera::<BridgetWorld>::default(),
@@ -252,7 +280,7 @@ pub fn mouse_look(
 }
 
 pub fn player_movement(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     settings: Res<PlayerSettings>,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
@@ -308,15 +336,6 @@ pub fn player_movement(
     }
 
     let chunk_get_voxel = voxel_world.get_voxel_fn();
-    let procedural_get_voxel = terrain.lookup();
-    let get_voxel = std::sync::Arc::new(move |pos: IVec3| {
-        let voxel = chunk_get_voxel(pos);
-        if voxel == WorldVoxel::Unset {
-            procedural_get_voxel(pos)
-        } else {
-            voxel
-        }
-    });
 
     let fly_active =
         settings.fly_activation == FlyActivation::Always || controller.flying;
@@ -337,12 +356,17 @@ pub fn player_movement(
         }
         if wish_dir != Vec3::ZERO {
             let delta = wish_dir.normalize() * FLY_SPEED * time.delta_secs();
-            move_by_delta(&mut transform.translation, delta, &*get_voxel);
+            move_by_delta(
+                &mut transform.translation,
+                delta,
+                chunk_get_voxel.as_ref(),
+                &terrain,
+            );
         }
-        recover_if_below_surface(&mut transform, &terrain, &*get_voxel);
+        recover_if_below_surface(&mut transform, &terrain, chunk_get_voxel.as_ref());
 
         if settings.fly_activation == FlyActivation::DoubleTap
-            && is_grounded(transform.translation, &*get_voxel)
+            && is_grounded(transform.translation, chunk_get_voxel.as_ref(), &terrain)
         {
             controller.flying = false;
             controller.grounded = true;
@@ -370,8 +394,14 @@ pub fn player_movement(
 
     let gravity = GRAVITY * settings.gravity_mode.multiplier();
     controller.velocity.y -= gravity * time.delta_secs();
-    move_with_collision(&mut transform, &mut controller, get_voxel.clone(), time.delta_secs());
-    recover_if_below_surface(&mut transform, &terrain, &*get_voxel);
+    move_with_collision(
+        &mut transform,
+        &mut controller,
+        chunk_get_voxel.as_ref(),
+        &terrain,
+        time.delta_secs(),
+    );
+    recover_if_below_surface(&mut transform, &terrain, chunk_get_voxel.as_ref());
 
     let moving = Vec2::new(controller.velocity.x, controller.velocity.z).length() > 0.5;
     if controller.grounded && moving {
@@ -389,10 +419,25 @@ pub fn player_movement(
     }
 }
 
+#[inline]
+fn resolve_voxel(
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    terrain: &ProceduralTerrain,
+    pos: IVec3,
+) -> WorldVoxel<u8> {
+    let voxel = chunk_get_voxel(pos);
+    if voxel == WorldVoxel::Unset {
+        terrain.voxel_at(pos)
+    } else {
+        voxel
+    }
+}
+
 fn move_by_delta(
     position: &mut Vec3,
     delta: Vec3,
-    get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized),
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    terrain: &ProceduralTerrain,
 ) {
     let mut new_pos = *position;
 
@@ -402,7 +447,7 @@ fn move_by_delta(
             continue;
         }
         let candidate = new_pos + movement;
-        if !collides(candidate, get_voxel) {
+        if !collides(candidate, chunk_get_voxel, terrain) {
             new_pos = candidate;
         }
     }
@@ -413,20 +458,22 @@ fn move_by_delta(
 fn recover_if_below_surface(
     transform: &mut Transform,
     terrain: &ProceduralTerrain,
-    get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized),
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
 ) {
     let x = transform.translation.x.floor() as i32;
     let z = transform.translation.z.floor() as i32;
     let min_feet_y = terrain.surface_height(x, z) as f32 + 1.0;
 
-    if transform.translation.y >= min_feet_y && !collides(transform.translation, get_voxel) {
+    if transform.translation.y >= min_feet_y
+        && !collides(transform.translation, chunk_get_voxel, terrain)
+    {
         return;
     }
 
     transform.translation.y = min_feet_y;
     for offset in 0..=6 {
         let candidate = transform.translation + Vec3::new(0.0, offset as f32, 0.0);
-        if !collides(candidate, get_voxel) {
+        if !collides(candidate, chunk_get_voxel, terrain) {
             transform.translation = candidate;
             return;
         }
@@ -436,7 +483,8 @@ fn recover_if_below_surface(
 fn move_with_collision(
     transform: &mut Transform,
     controller: &mut PlayerController,
-    get_voxel: std::sync::Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync>,
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    terrain: &ProceduralTerrain,
     dt: f32,
 ) {
     let velocity = controller.velocity * dt;
@@ -448,7 +496,7 @@ fn move_with_collision(
             continue;
         }
         let candidate = new_pos + movement;
-        if !collides(candidate, &*get_voxel) {
+        if !collides(candidate, chunk_get_voxel, terrain) {
             new_pos = candidate;
         } else if axis == Vec3::Y && movement.y < 0.0 {
             controller.grounded = true;
@@ -462,17 +510,26 @@ fn move_with_collision(
     }
 
     transform.translation = new_pos;
-    controller.grounded = controller.grounded || is_grounded(new_pos, &*get_voxel);
+    controller.grounded =
+        controller.grounded || is_grounded(new_pos, chunk_get_voxel, terrain);
 }
 
-fn collides(position: Vec3, get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized)) -> bool {
+fn collides(
+    position: Vec3,
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    terrain: &ProceduralTerrain,
+) -> bool {
     let min = position + Vec3::new(-PLAYER_RADIUS, 0.0, -PLAYER_RADIUS);
     let max = position + Vec3::new(PLAYER_RADIUS, PLAYER_HEIGHT, PLAYER_RADIUS);
 
     for x in (min.x.floor() as i32)..=(max.x.floor() as i32) {
         for y in (min.y.floor() as i32)..=(max.y.floor() as i32) {
             for z in (min.z.floor() as i32)..=(max.z.floor() as i32) {
-                if is_solid_voxel(get_voxel(IVec3::new(x, y, z))) {
+                if is_solid_voxel(resolve_voxel(
+                    chunk_get_voxel,
+                    terrain,
+                    IVec3::new(x, y, z),
+                )) {
                     return true;
                 }
             }
@@ -481,9 +538,17 @@ fn collides(position: Vec3, get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Siz
     false
 }
 
-fn is_grounded(position: Vec3, get_voxel: &(impl Fn(IVec3) -> WorldVoxel<u8> + ?Sized)) -> bool {
+fn is_grounded(
+    position: Vec3,
+    chunk_get_voxel: &dyn Fn(IVec3) -> WorldVoxel<u8>,
+    terrain: &ProceduralTerrain,
+) -> bool {
     let foot = position + Vec3::new(0.0, -0.05, 0.0);
-    is_solid_voxel(get_voxel(foot.floor().as_ivec3()))
+    is_solid_voxel(resolve_voxel(
+        chunk_get_voxel,
+        terrain,
+        foot.floor().as_ivec3(),
+    ))
 }
 
 fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {
@@ -498,4 +563,23 @@ fn is_solid_voxel(voxel: WorldVoxel<u8>) -> bool {
 pub fn find_spawn_position(terrain: &ProceduralTerrain) -> Vec3 {
     let height = terrain.surface_height(0, 0);
     Vec3::new(0.5, height as f32 + 1.0, 0.5)
+}
+
+pub fn apply_render_settings(
+    settings: Res<PlayerSettings>,
+    mut windows: Query<&mut Window>,
+    mut cameras: Query<&mut Msaa, With<PlayerCamera>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+
+    let present_mode = settings.vsync_mode.present_mode();
+    for mut window in &mut windows {
+        window.present_mode = present_mode;
+    }
+
+    for mut msaa in &mut cameras {
+        *msaa = settings.msaa;
+    }
 }

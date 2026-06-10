@@ -1,9 +1,13 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+static TERRAIN_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 use bevy::platform::collections::HashMap;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use bevy::prelude::*;
+use bevy_voxel_world::custom_meshing::CHUNK_SIZE_I;
 use bevy_voxel_world::prelude::*;
 use noise::{HybridMulti, NoiseFn, Perlin};
 
@@ -48,12 +52,14 @@ const TREE_RADIUS: i32 = 48;
 const TREE_LEAF_CLEARANCE: i32 = 6;
 
 /// Cached procedural terrain data. Rebuilt only when the world seed changes.
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ProceduralTerrain {
+    pub generation: u64,
     pub seed: u32,
     height_noise: Arc<HybridMulti<Perlin>>,
     height_cache: Arc<DashMap<(i32, i32), i32>>,
-    lookup: Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync>,
+    tree_columns: Arc<HashMap<(i32, i32), i32>>,
+    landmarks: LandmarkOrigins,
 }
 
 fn build_tree_columns(
@@ -116,43 +122,16 @@ impl ProceduralTerrain {
         // locks so parallel voxel lookups no longer contend on one lock.
         let height_cache: Arc<DashMap<(i32, i32), i32>> = Arc::new(DashMap::new());
         let tree_noise = Perlin::new(seed.wrapping_add(77_007));
-        let tree_columns = build_tree_columns(&height_noise, &tree_noise);
+        let tree_columns = Arc::new(build_tree_columns(&height_noise, &tree_noise));
         let landmarks = landmark_origins(&height_noise);
-        let noise = height_noise.clone();
-        let cache = height_cache.clone();
-        let voxel_cache: Arc<DashMap<IVec3, WorldVoxel<u8>>> = Arc::new(DashMap::new());
-        let memo = voxel_cache.clone();
-        let lookup = Arc::new(move |pos: IVec3| {
-            if let Some(voxel) = memo.get(&pos) {
-                return *voxel;
-            }
-
-            let height = *cache
-                .entry((pos.x, pos.z))
-                .or_insert_with(|| terrain_surface_height_with(&noise, pos.x, pos.z));
-
-            let voxel = if pos.y > height + TREE_LEAF_CLEARANCE {
-                WorldVoxel::Air
-            } else if pos.y < 0 {
-                WorldVoxel::Solid(BlockId::Stone.as_material())
-            } else if pos.y <= height + TREE_LEAF_CLEARANCE
-                && (in_tree_region(pos) || near_landmark(pos, landmarks))
-            {
-                decoration_voxel_at(landmarks, &tree_columns, pos, height)
-                    .unwrap_or_else(|| terrain_voxel_at(pos, height))
-            } else {
-                terrain_voxel_at(pos, height)
-            };
-
-            memo.insert(pos, voxel);
-            voxel
-        });
 
         Self {
+            generation: TERRAIN_GENERATION.fetch_add(1, Ordering::Relaxed),
             seed,
             height_noise,
             height_cache,
-            lookup,
+            tree_columns,
+            landmarks,
         }
     }
 
@@ -164,18 +143,76 @@ impl ProceduralTerrain {
     }
 
     pub fn voxel_at(&self, pos: IVec3) -> WorldVoxel<u8> {
-        (self.lookup)(pos)
-    }
-
-    pub fn lookup(&self) -> Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync> {
-        self.lookup.clone()
+        let height = self.surface_height(pos.x, pos.z);
+        procedural_voxel_at(pos, height, self.landmarks, &self.tree_columns)
     }
 }
 
-pub fn terrain_lookup(lookup: Arc<dyn Fn(IVec3) -> WorldVoxel<u8> + Send + Sync>) -> VoxelLookupDelegate<u8> {
-    Box::new(move |_chunk_pos, _lod, _previous| {
-        let lookup = lookup.clone();
-        Box::new(move |pos: IVec3, _previous| lookup(pos))
+fn procedural_voxel_at(
+    pos: IVec3,
+    height: i32,
+    landmarks: LandmarkOrigins,
+    tree_columns: &HashMap<(i32, i32), i32>,
+) -> WorldVoxel<u8> {
+    if pos.y > height + TREE_LEAF_CLEARANCE {
+        WorldVoxel::Air
+    } else if pos.y < 0 {
+        WorldVoxel::Solid(BlockId::Stone.as_material())
+    } else if pos.y <= height + TREE_LEAF_CLEARANCE
+        && (in_tree_region(pos) || near_landmark(pos, landmarks))
+    {
+        decoration_voxel_at(landmarks, tree_columns, pos, height)
+            .unwrap_or_else(|| terrain_voxel_at(pos, height))
+    } else {
+        terrain_voxel_at(pos, height)
+    }
+}
+
+fn lod_sample_step(lod: LodLevel) -> i32 {
+    1i32 << lod.min(2)
+}
+
+fn lod_snap(pos: IVec3, step: i32) -> IVec3 {
+    if step <= 1 {
+        return pos;
+    }
+
+    IVec3::new(
+        pos.x.div_euclid(step) * step,
+        pos.y.div_euclid(step) * step,
+        pos.z.div_euclid(step) * step,
+    )
+}
+
+pub fn terrain_lookup(terrain: Arc<ProceduralTerrain>) -> VoxelLookupDelegate<u8> {
+    Box::new(move |chunk_pos, lod, _previous| {
+        let terrain = terrain.clone();
+        let step = lod_sample_step(lod);
+        let landmarks = terrain.landmarks;
+        let tree_columns = terrain.tree_columns.clone();
+
+        let origin = chunk_pos * CHUNK_SIZE_I;
+        let min_x = origin.x - 1;
+        let max_x = origin.x + CHUNK_SIZE_I as i32 + 1;
+        let min_z = origin.z - 1;
+        let max_z = origin.z + CHUNK_SIZE_I as i32 + 1;
+        let column_count = ((max_x - min_x + 1) * (max_z - min_z + 1)) as usize;
+
+        let mut local_heights = HashMap::with_capacity(column_count);
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                local_heights.insert((x, z), terrain.surface_height(x, z));
+            }
+        }
+
+        Box::new(move |pos: IVec3, _previous| {
+            let query = lod_snap(pos, step);
+            let height = local_heights
+                .get(&(query.x, query.z))
+                .copied()
+                .unwrap_or_else(|| terrain.surface_height(query.x, query.z));
+            procedural_voxel_at(query, height, landmarks, &tree_columns)
+        })
     })
 }
 
