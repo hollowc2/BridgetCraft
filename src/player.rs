@@ -546,15 +546,25 @@ fn recover_if_below_surface(
     terrain: &ProceduralTerrain,
     resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>,
 ) {
-    let x = transform.translation.x.floor() as i32;
-    let z = transform.translation.z.floor() as i32;
-    let min_feet_y = terrain.surface_height(x, z) as f32 + 1.0;
+    const VOID_Y: f32 = -32.0;
 
-    if transform.translation.y >= min_feet_y && !collides(transform.translation, resolve) {
-        return;
+    if !collides(transform.translation, resolve) {
+        if transform.translation.y > VOID_Y {
+            return;
+        }
+    } else {
+        for offset in 1..=6 {
+            let candidate = transform.translation + Vec3::new(0.0, offset as f32, 0.0);
+            if !collides(candidate, resolve) {
+                transform.translation = candidate;
+                return;
+            }
+        }
     }
 
-    transform.translation.y = min_feet_y;
+    let x = transform.translation.x.floor() as i32;
+    let z = transform.translation.z.floor() as i32;
+    transform.translation.y = terrain.surface_height(x, z) as f32 + 1.0;
     for offset in 0..=6 {
         let candidate = transform.translation + Vec3::new(0.0, offset as f32, 0.0);
         if !collides(candidate, resolve) {
@@ -593,7 +603,7 @@ fn move_with_collision(
     }
 
     transform.translation = new_pos;
-    controller.grounded = controller.grounded || is_grounded(new_pos, resolve);
+    controller.grounded = is_grounded(new_pos, resolve);
 }
 
 fn collides(position: Vec3, resolve: &dyn Fn(IVec3) -> WorldVoxel<u8>) -> bool {

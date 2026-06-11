@@ -304,14 +304,20 @@ pub fn spawn_game_menu(commands: &mut Commands) {
                     BorderColor::all(MENU_PANEL_BORDER),
                 ))
                 .with_children(|parent| {
-                    parent.spawn((
-                        Text::new("PAUSED"),
-                        TextFont {
-                            font_size: 14.0,
+                    parent
+                        .spawn(Node {
+                            flex_shrink: 0.0,
+                            margin: UiRect::bottom(Val::Px(4.0)),
                             ..Default::default()
-                        },
-                        TextColor(MENU_ACCENT),
-                    ));
+                        })
+                        .with_child((
+                            Text::new("Paused"),
+                            TextFont {
+                                font_size: 22.0,
+                                ..Default::default()
+                            },
+                            TextColor(MENU_ACCENT),
+                        ));
                     parent.spawn((
                         Text::new("Game Menu"),
                         TextFont {
