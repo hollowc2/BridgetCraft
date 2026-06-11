@@ -35,6 +35,11 @@ struct LandmarkOrigins {
     lighthouse: IVec3,
     bridge: IVec3,
     observatory: IVec3,
+    city: IVec3,
+    colosseum: IVec3,
+    clock_tower: IVec3,
+    windmill: IVec3,
+    castle: IVec3,
 }
 
 fn landmark_origins(height_noise: &HybridMulti<Perlin>) -> LandmarkOrigins {
@@ -45,6 +50,11 @@ fn landmark_origins(height_noise: &HybridMulti<Perlin>) -> LandmarkOrigins {
         lighthouse: IVec3::new(24, surface(24, 30) + 1, 30),
         bridge: IVec3::new(0, surface(0, -34) + 1, -34),
         observatory: IVec3::new(-22, surface(-22, -22) + 1, -22),
+        city: IVec3::new(75, surface(75, 0) + 1, 0),
+        colosseum: IVec3::new(0, surface(0, -70) + 1, -70),
+        clock_tower: IVec3::new(-65, surface(-65, 30) + 1, 30),
+        windmill: IVec3::new(-30, surface(-30, -65) + 1, -65),
+        castle: IVec3::new(60, surface(60, 60) + 1, 60),
     }
 }
 
@@ -69,6 +79,11 @@ fn near_landmark(pos: IVec3, origins: LandmarkOrigins) -> bool {
         (origins.lighthouse, 29, 4),
         (origins.bridge, 13, 14),
         (origins.observatory, 22, 9),
+        (origins.city, 28, 28),
+        (origins.colosseum, 18, 16),
+        (origins.clock_tower, 48, 5),
+        (origins.windmill, 22, 7),
+        (origins.castle, 22, 14),
     ];
 
     for (origin, max_y, horizontal) in checks {
@@ -554,6 +569,364 @@ fn observatory_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
     None
 }
 
+fn pos_hash(x: i32, z: i32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(3_748_279);
+    h = h.wrapping_add((z as u32).wrapping_mul(7_507_201));
+    h ^ (h >> 13)
+}
+
+fn hollow_box_local(
+    local: IVec3,
+    y_offset: i32,
+    half_x: i32,
+    half_z: i32,
+    height: i32,
+    wall: BlockId,
+    floor: BlockId,
+) -> Option<BlockId> {
+    let y = local.y - y_offset;
+    if y < 0 || y >= height || local.x.abs() > half_x || local.z.abs() > half_z {
+        return None;
+    }
+
+    let on_wall = local.x.abs() == half_x || local.z.abs() == half_z;
+    let on_floor = y == 0;
+    if on_wall {
+        Some(wall)
+    } else if on_floor {
+        Some(floor)
+    } else {
+        None
+    }
+}
+
+fn city_building_voxel_at(local: IVec3, bx: i32, bz: i32) -> Option<BlockId> {
+    let rel = IVec3::new(local.x - bx, local.y, local.z - bz);
+    let hash = pos_hash(bx, bz);
+    let height = 6 + (hash % 14) as i32;
+    let half_x = 2 + (hash % 3) as i32;
+    let half_z = 2 + ((hash >> 4) % 3) as i32;
+    let brick = if hash % 2 == 0 {
+        BlockId::BrickRed
+    } else {
+        BlockId::BrickGrey
+    };
+
+    if rel.y == 0 && rel.x.abs() <= half_x && rel.z.abs() <= half_z {
+        return Some(BlockId::Cobble);
+    }
+
+    if rel.y >= 1 && rel.y <= height {
+        if rel.x.abs() <= half_x && rel.z.abs() <= half_z {
+            let on_face = rel.x.abs() == half_x || rel.z.abs() == half_z;
+            let on_roof = rel.y == height;
+            if on_face || on_roof {
+                return Some(brick);
+            }
+            if rel.y % 4 == 0 && rel.x.abs() <= half_x - 1 && rel.z.abs() <= half_z - 1 {
+                return Some(BlockId::Glass);
+            }
+        }
+    }
+
+    if rel.y == height + 1 && rel.x == 0 && rel.z == 0 {
+        return Some(BlockId::Glowstone);
+    }
+
+    None
+}
+
+fn city_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
+    let local = pos - origin;
+    let half = 28;
+
+    if local.y == 0 && local.x.abs() <= half && local.z.abs() <= half {
+        let on_street_x = local.x % 8 == 0;
+        let on_street_z = local.z % 8 == 0;
+        if on_street_x || on_street_z {
+            return Some(BlockId::Cobble);
+        }
+        if local.x.abs() <= 4 && local.z.abs() <= 4 {
+            return Some(BlockId::Water);
+        }
+        return Some(BlockId::GrassDecor);
+    }
+
+    if local.y == 1 && local.x.abs() <= 3 && local.z.abs() <= 3 {
+        return Some(BlockId::Stone);
+    }
+    if local.y == 2 && local.x == 0 && local.z == 0 {
+        return Some(BlockId::Glowstone);
+    }
+
+    if (local.x % 8 == 4) && (local.z % 8 == 4) && local.y >= 1 && local.y <= 3 {
+        if local.y == 3 && local.x.abs() <= half && local.z.abs() <= half {
+            return Some(BlockId::Glowstone);
+        }
+        if local.y < 3 {
+            return Some(BlockId::TrunkWhite);
+        }
+    }
+
+    for bx in (-24i32..=24).step_by(8) {
+        for bz in (-24i32..=24).step_by(8) {
+            if bx.abs() <= 3 && bz.abs() <= 3 {
+                continue;
+            }
+            if let Some(block) = city_building_voxel_at(local, bx, bz) {
+                return Some(block);
+            }
+        }
+    }
+
+    None
+}
+
+fn colosseum_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
+    let local = pos - origin;
+    let outer_rx = 14;
+    let outer_rz = 10;
+    let inner_rx = 9;
+    let inner_rz = 6;
+
+    let in_outer = (local.x * local.x) * inner_rz * inner_rz
+        + (local.z * local.z) * outer_rx * outer_rx
+        <= outer_rx * outer_rx * inner_rz * inner_rz;
+    let in_inner = (local.x * local.x) * inner_rz * inner_rz
+        + (local.z * local.z) * inner_rx * inner_rx
+        <= inner_rx * inner_rx * inner_rz * inner_rz;
+
+    if local.y == 0 && in_outer {
+        return Some(if in_inner {
+            BlockId::Sand
+        } else {
+            BlockId::Cobble
+        });
+    }
+
+    for tier in 0..4 {
+        let base_y = 1 + tier * 4;
+        let tier_rx = outer_rx - tier;
+        let tier_rz = outer_rz - tier / 2;
+        let tier_inner_rx = inner_rx - tier;
+        let tier_inner_rz = inner_rz - tier / 2;
+
+        let in_tier_outer = (local.x * local.x) * tier_inner_rz * tier_inner_rz
+            + (local.z * local.z) * tier_rx * tier_rx
+            <= tier_rx * tier_rx * tier_inner_rz * tier_inner_rz;
+        let in_tier_inner = (local.x * local.x) * tier_inner_rz * tier_inner_rz
+            + (local.z * local.z) * tier_inner_rx * tier_inner_rx
+            <= tier_inner_rx * tier_inner_rx * tier_inner_rz * tier_inner_rz;
+
+        if local.y >= base_y && local.y < base_y + 4 {
+            if in_tier_outer && !in_tier_inner {
+                let on_face = local.x.abs() >= tier_rx - 1 || local.z.abs() >= tier_rz - 1;
+                if on_face {
+                    let brick = if tier % 2 == 0 {
+                        BlockId::BrickRed
+                    } else {
+                        BlockId::BrickGrey
+                    };
+                    return Some(brick);
+                }
+                if local.y == base_y + 3 {
+                    return Some(BlockId::Cobble);
+                }
+            }
+        }
+    }
+
+    if local.y >= 1 && local.y <= 14 {
+        for arch_x in [-12, -6, 0, 6, 12] {
+            if local.x == arch_x && local.z.abs() <= 1 {
+                let arch_top = 8 - (arch_x.abs() / 3);
+                if local.y <= arch_top {
+                    return Some(BlockId::BrickGrey);
+                }
+            }
+        }
+    }
+
+    if local.y == 17 && in_outer && !in_inner {
+        return Some(BlockId::Glowstone);
+    }
+
+    None
+}
+
+fn clock_tower_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
+    let local = pos - origin;
+
+    if local.y == 0 && in_disk(local.x, local.z, 4) {
+        return Some(BlockId::Cobble);
+    }
+
+    if local.y >= 1 && local.y <= 32 {
+        if on_disk_edge(local.x, local.z, 3) || (local.x == 0 && local.z == 0) {
+            let band = local.y % 6 == 0;
+            return Some(if band {
+                BlockId::BrickGrey
+            } else {
+                BlockId::BrickRed
+            });
+        }
+    }
+
+    if local.y >= 33 && local.y <= 38 {
+        if on_disk_edge(local.x, local.z, 4) {
+            return Some(BlockId::BrickGrey);
+        }
+        if local.y == 33 && local.x.abs() <= 3 && local.z.abs() <= 3 {
+            return Some(BlockId::Planks);
+        }
+    }
+
+    if local.y == 36 {
+        for (cx, cz) in [(-2, 0), (2, 0), (0, -2), (0, 2)] {
+            if local.x >= cx - 1
+                && local.x <= cx + 1
+                && local.z >= cz - 1
+                && local.z <= cz + 1
+            {
+                let on_ring = local.x == cx - 1
+                    || local.x == cx + 1
+                    || local.z == cz - 1
+                    || local.z == cz + 1;
+                if on_ring {
+                    return Some(BlockId::Wool);
+                }
+                if local.x == cx && local.z == cz {
+                    return Some(BlockId::Glowstone);
+                }
+            }
+        }
+    }
+
+    for spire_y in 39..=46 {
+        if local.y == spire_y && local.x == 0 && local.z == 0 {
+            return Some(if spire_y == 46 {
+                BlockId::Glowstone
+            } else {
+                BlockId::BrickGrey
+            });
+        }
+    }
+
+    None
+}
+
+fn windmill_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
+    let local = pos - origin;
+
+    if local.y == 0 && in_disk(local.x, local.z, 5) {
+        return Some(BlockId::Cobble);
+    }
+
+    if local.y >= 1 && local.y <= 12 {
+        if on_disk_edge(local.x, local.z, 3) {
+            return Some(BlockId::BrickRed);
+        }
+        if local.x == 0 && local.z == 0 {
+            return Some(BlockId::Planks);
+        }
+    }
+
+    if local.y == 13 && on_disk_edge(local.x, local.z, 3) {
+        return Some(BlockId::BrickGrey);
+    }
+
+    if local.y == 14 && local.x.abs() <= 1 && local.z.abs() <= 1 {
+        return Some(BlockId::Wood);
+    }
+
+    if local.y == 15 {
+        for blade in 0..4 {
+            let angle = blade as f32 * std::f32::consts::FRAC_PI_2;
+            let dir_x = angle.cos().round() as i32;
+            let dir_z = angle.sin().round() as i32;
+            for dist in 1..=6 {
+                if local.x == dir_x * dist && local.z == dir_z * dist {
+                    return Some(if dist % 2 == 0 {
+                        BlockId::Wool
+                    } else {
+                        BlockId::Planks
+                    });
+                }
+            }
+        }
+        if local.x == 0 && local.z == 0 {
+            return Some(BlockId::Trunk);
+        }
+    }
+
+    None
+}
+
+fn castle_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
+    let local = pos - origin;
+    let wall_half = 12;
+
+    if local.y == 0 && local.x.abs() <= wall_half && local.z.abs() <= wall_half {
+        return Some(BlockId::Cobble);
+    }
+
+    if local.y >= 1 && local.y <= 8 {
+        let on_wall = local.x.abs() == wall_half
+            || local.z.abs() == wall_half
+            || (local.x.abs() <= 1 && local.z == -wall_half);
+        if on_wall && local.x.abs() <= wall_half && local.z.abs() <= wall_half {
+            let crenel = local.y % 2 == 1 && local.y >= 6;
+            if !crenel || local.x % 2 == 0 || local.z % 2 == 0 {
+                return Some(BlockId::Stone);
+            }
+        }
+    }
+
+    let towers = [
+        (-wall_half, -wall_half),
+        (wall_half, -wall_half),
+        (-wall_half, wall_half),
+        (wall_half, wall_half),
+    ];
+    for (tx, tz) in towers {
+        let dx = local.x - tx;
+        let dz = local.z - tz;
+        if dx.abs() <= 2 && dz.abs() <= 2 {
+            if local.y >= 1 && local.y <= 16 {
+                if dx.abs() == 2 || dz.abs() == 2 {
+                    return Some(BlockId::BrickGrey);
+                }
+            }
+            if local.y == 17 && (dx.abs() == 2 || dz.abs() == 2) {
+                return Some(BlockId::BrickRed);
+            }
+            if local.y == 18 && dx == 0 && dz == 0 {
+                return Some(BlockId::Glowstone);
+            }
+        }
+    }
+
+    if local.y >= 1 && local.y <= 10 && local.x.abs() <= 4 && local.z.abs() <= 6 {
+        if let Some(block) = hollow_box_local(
+            IVec3::new(local.x, local.y, local.z),
+            1,
+            4,
+            6,
+            10,
+            BlockId::BrickRed,
+            BlockId::Planks,
+        ) {
+            return Some(block);
+        }
+    }
+
+    if local.y == 11 && local.x == 0 && local.z == 0 {
+        return Some(BlockId::Glowstone);
+    }
+
+    None
+}
+
 fn empire_tower_voxel_at(origin: IVec3, pos: IVec3) -> Option<BlockId> {
     let local = pos - origin;
     let sections = [(5, 22), (4, 18), (3, 14), (2, 12), (1, 16)];
@@ -631,6 +1004,60 @@ fn landmark_voxel_at(origins: LandmarkOrigins, pos: IVec3) -> Option<BlockId> {
         && observatory_local.z.abs() <= 9
     {
         if let Some(block) = observatory_voxel_at(origins.observatory, pos) {
+            return Some(block);
+        }
+    }
+
+    let city_local = pos - origins.city;
+    if city_local.y >= 0
+        && city_local.y <= 28
+        && city_local.x.abs() <= 28
+        && city_local.z.abs() <= 28
+    {
+        if let Some(block) = city_voxel_at(origins.city, pos) {
+            return Some(block);
+        }
+    }
+
+    let colosseum_local = pos - origins.colosseum;
+    if colosseum_local.y >= 0
+        && colosseum_local.y <= 18
+        && colosseum_local.x.abs() <= 16
+        && colosseum_local.z.abs() <= 12
+    {
+        if let Some(block) = colosseum_voxel_at(origins.colosseum, pos) {
+            return Some(block);
+        }
+    }
+
+    let clock_local = pos - origins.clock_tower;
+    if clock_local.y >= 0
+        && clock_local.y <= 48
+        && in_disk(clock_local.x, clock_local.z, 5)
+    {
+        if let Some(block) = clock_tower_voxel_at(origins.clock_tower, pos) {
+            return Some(block);
+        }
+    }
+
+    let windmill_local = pos - origins.windmill;
+    if windmill_local.y >= 0
+        && windmill_local.y <= 22
+        && windmill_local.x.abs() <= 7
+        && windmill_local.z.abs() <= 7
+    {
+        if let Some(block) = windmill_voxel_at(origins.windmill, pos) {
+            return Some(block);
+        }
+    }
+
+    let castle_local = pos - origins.castle;
+    if castle_local.y >= 0
+        && castle_local.y <= 22
+        && castle_local.x.abs() <= 14
+        && castle_local.z.abs() <= 14
+    {
+        if let Some(block) = castle_voxel_at(origins.castle, pos) {
             return Some(block);
         }
     }
