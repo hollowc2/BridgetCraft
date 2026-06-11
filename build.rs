@@ -56,6 +56,7 @@ fn main() {
     let atlas_path = out_dir.join("voxel_atlas.png");
     write_png_atomically(&atlas_path, &atlas);
 
+    build_hotbar_atlas(out_dir, tiles_dir);
     build_sky_cubemap(out_dir);
 
     // Only depend on inputs. Do NOT rerun-if-changed on generated outputs: build.rs writes
@@ -103,6 +104,83 @@ fn write_png_atomically(path: &Path, image: &image::RgbaImage) {
 
 fn temp_path(path: &Path) -> PathBuf {
     path.with_extension("tmp.png")
+}
+
+/// One 64px icon per block material (0–19) plus pick/shovel/axe (20–22).
+fn build_hotbar_atlas(out_dir: &Path, tiles_dir: &Path) {
+    let items_dir = Path::new("assets/kenney_voxel-pack/PNG/Items");
+    let icon_size = 64u32;
+    let icon_count = 23u32;
+    let atlas_height = icon_size * icon_count;
+    let mut atlas = image::RgbaImage::new(icon_size, atlas_height);
+
+    let block_icons = [
+        "grass_top.png",
+        "dirt.png",
+        "stone.png",
+        "sand.png",
+        "wood.png",
+        "brick_red.png",
+        "brick_grey.png",
+        "glass.png",
+        "gravel_stone.png",
+        "greystone_sand.png",
+        "snow.png",
+        "leaves_transparent.png",
+        "trunk_side.png",
+        "trunk_white_side.png",
+        "water.png",
+        "greystone.png",
+        "fence_wood.png",
+        "cotton_blue.png",
+        "redstone_emerald.png",
+        "grass1.png",
+    ];
+
+    for (index, file) in block_icons.iter().enumerate() {
+        blit_icon(
+            &mut atlas,
+            &tiles_dir.join(file),
+            icon_size,
+            index as u32 * icon_size,
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            tiles_dir.join(file).display()
+        );
+    }
+
+    let tool_icons = [
+        "pick_iron.png",
+        "shovel_iron.png",
+        "axe_iron.png",
+    ];
+    for (offset, file) in tool_icons.iter().enumerate() {
+        let row = 20 + offset as u32;
+        blit_icon(
+            &mut atlas,
+            &items_dir.join(file),
+            icon_size,
+            row * icon_size,
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            items_dir.join(file).display()
+        );
+    }
+
+    let hotbar_path = out_dir.join("hotbar_atlas.png");
+    write_png_atomically(&hotbar_path, &atlas);
+}
+
+fn blit_icon(atlas: &mut image::RgbaImage, path: &Path, icon_size: u32, y: u32) {
+    let tile = image::open(path).unwrap_or_else(|err| {
+        panic!("failed to load hotbar icon {}: {err}", path.display());
+    });
+    let tile = tile
+        .resize_exact(icon_size, icon_size, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    image::imageops::overlay(atlas, &tile, 0, y as i64);
 }
 
 fn build_sky_cubemap(out_dir: &Path) {

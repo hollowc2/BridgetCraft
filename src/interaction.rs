@@ -5,8 +5,9 @@ use bevy_replicon::prelude::{ClientTriggerExt, ServerTriggerExt, ToClients, Send
 use bevy_voxel_world::prelude::*;
 
 use crate::audio::{voxel_block_at, GameAudio};
-use crate::block::HotbarSelection;
+use crate::block::SavedVoxel;
 use crate::gamepad::select_primary;
+use crate::item::{block_break_seconds, HotbarSelection};
 use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};
@@ -33,6 +34,19 @@ impl PendingBlockEdits {
 
     pub fn get_voxel(&self, pos: IVec3) -> Option<WorldVoxel<u8>> {
         self.edits.get(&pos).copied()
+    }
+}
+
+#[derive(Resource, Default, Debug)]
+pub struct BlockBreakState {
+    pub target: Option<IVec3>,
+    pub progress: f32,
+}
+
+impl BlockBreakState {
+    pub fn reset(&mut self) {
+        self.target = None;
+        self.progress = 0.0;
     }
 }
 
@@ -69,11 +83,11 @@ pub fn update_block_target(
     let _ = buttons;
 }
 
-fn break_pressed(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) -> bool {
-    buttons.just_pressed(MouseButton::Left)
+fn break_held(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) -> bool {
+    buttons.pressed(MouseButton::Left)
         || gamepad.is_some_and(|gamepad| {
-            gamepad.just_pressed(GamepadButton::West)
-                || gamepad.just_pressed(GamepadButton::RightTrigger2)
+            gamepad.pressed(GamepadButton::West)
+                || gamepad.pressed(GamepadButton::RightTrigger2)
         })
 }
 
@@ -85,6 +99,42 @@ fn place_pressed(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) 
         })
 }
 
+pub fn update_block_break_progress(
+    time: Res<Time>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    gamepads: Query<(&Name, &Gamepad)>,
+    selection: Res<HotbarSelection>,
+    target: Single<&BlockTarget>,
+    voxel_world: VoxelWorld<BridgetWorld>,
+    terrain: Res<ProceduralTerrain>,
+    mut break_state: ResMut<BlockBreakState>,
+) {
+    let gamepad = select_primary(gamepads.iter());
+
+    if !break_held(&buttons, gamepad) {
+        break_state.reset();
+        return;
+    }
+
+    let Some(hit_pos) = target.hit_pos else {
+        break_state.reset();
+        return;
+    };
+
+    let Some(block) = voxel_block_at(&voxel_world, &terrain, hit_pos) else {
+        break_state.reset();
+        return;
+    };
+
+    if break_state.target != Some(hit_pos) {
+        break_state.target = Some(hit_pos);
+        break_state.progress = 0.0;
+    }
+
+    let seconds = block_break_seconds(block, selection.selected());
+    break_state.progress += time.delta_secs() / seconds;
+}
+
 pub fn handle_block_interaction(
     buttons: Res<ButtonInput<MouseButton>>,
     gamepads: Query<(&Name, &Gamepad)>,
@@ -93,6 +143,7 @@ pub fn handle_block_interaction(
     voxel_world: VoxelWorld<BridgetWorld>,
     mut pending: ResMut<PendingBlockEdits>,
     mut edits: ResMut<WorldEdits>,
+    mut break_state: ResMut<BlockBreakState>,
     role: Res<NetworkRole>,
     terrain: Res<ProceduralTerrain>,
     mut audio: ResMut<GameAudio>,
@@ -100,29 +151,14 @@ pub fn handle_block_interaction(
 ) {
     let gamepad = select_primary(gamepads.iter());
 
-    if role.is_client() {
-        if break_pressed(&buttons, gamepad) {
-            if let Some(pos) = target.hit_pos {
+    if break_state.progress >= 1.0 {
+        if let Some(pos) = break_state.target.or(target.hit_pos) {
+            if role.is_client() {
                 commands.client_trigger(BlockEditRequest {
                     pos,
                     voxel: SavedVoxel::Air,
                 });
-            }
-        }
-        if place_pressed(&buttons, gamepad) {
-            if let Some(pos) = target.place_pos {
-                commands.client_trigger(BlockEditRequest {
-                    pos,
-                    voxel: SavedVoxel::Solid(selection.selected_block().as_material()),
-                });
-            }
-        }
-        return;
-    }
-
-    if break_pressed(&buttons, gamepad) {
-        if let Some(pos) = target.hit_pos {
-            if let Some(block) = voxel_block_at(&voxel_world, &terrain, pos) {
+            } else if let Some(block) = voxel_block_at(&voxel_world, &terrain, pos) {
                 apply_block_edit(&mut pending, &mut edits, pos, WorldVoxel::Air);
                 audio.play_block_break(&mut commands, block, pos);
                 if role.is_host() {
@@ -136,24 +172,40 @@ pub fn handle_block_interaction(
                 }
             }
         }
+        break_state.reset();
     }
 
-    if place_pressed(&buttons, gamepad) {
-        if let Some(pos) = target.place_pos {
-            let block = selection.selected_block();
-            let voxel = block.to_world_voxel();
-            apply_block_edit(&mut pending, &mut edits, pos, voxel);
-            audio.play_block_place(&mut commands, block, pos);
-            if role.is_host() {
-                commands.server_trigger(ToClients {
-                    targets: SendTargets::CLIENTS_ONLY,
-                    message: BlockEditBroadcast {
-                        pos,
-                        voxel: SavedVoxel::from_world_voxel(voxel),
-                    },
-                });
-            }
-        }
+    if !place_pressed(&buttons, gamepad) {
+        return;
+    }
+
+    let Some(block) = selection.selected_block() else {
+        return;
+    };
+
+    let Some(pos) = target.place_pos else {
+        return;
+    };
+
+    if role.is_client() {
+        commands.client_trigger(BlockEditRequest {
+            pos,
+            voxel: SavedVoxel::Solid(block.as_material()),
+        });
+        return;
+    }
+
+    let voxel = block.to_world_voxel();
+    apply_block_edit(&mut pending, &mut edits, pos, voxel);
+    audio.play_block_place(&mut commands, block, pos);
+    if role.is_host() {
+        commands.server_trigger(ToClients {
+            targets: SendTargets::CLIENTS_ONLY,
+            message: BlockEditBroadcast {
+                pos,
+                voxel: SavedVoxel::from_world_voxel(voxel),
+            },
+        });
     }
 }
 
@@ -189,5 +241,3 @@ pub fn flush_pending_block_edits(
 ) {
     apply_pending_to_world(&mut pending, &mut voxel_world);
 }
-
-use crate::block::SavedVoxel;

@@ -1,8 +1,7 @@
-use bevy::prelude::*;
 use bevy_voxel_world::prelude::WorldVoxel;
 use serde::{Deserialize, Serialize};
 
-pub const HOTBAR_SIZE: usize = 9;
+use crate::item::BlockBreakCategory;
 
 /// Texture atlas indices (128px tiles stacked vertically in `assets/textures/voxel_atlas.png`).
 pub mod atlas {
@@ -81,18 +80,6 @@ impl BlockId {
         BlockId::GrassDecor,
     ];
 
-    pub const HOTBAR: [BlockId; HOTBAR_SIZE] = [
-        BlockId::DirtGrass,
-        BlockId::Dirt,
-        BlockId::Stone,
-        BlockId::Wood,
-        BlockId::BrickRed,
-        BlockId::Glass,
-        BlockId::Sand,
-        BlockId::Leaves,
-        BlockId::Glowstone,
-    ];
-
     pub fn as_material(self) -> u8 {
         self as u8
     }
@@ -150,6 +137,38 @@ impl BlockId {
 
     pub fn is_solid(self) -> bool {
         !matches!(self, BlockId::Water)
+    }
+
+    pub fn break_category(self) -> BlockBreakCategory {
+        match self {
+            BlockId::DirtGrass
+            | BlockId::Dirt
+            | BlockId::Sand
+            | BlockId::Gravel
+            | BlockId::Clay
+            | BlockId::Snow
+            | BlockId::GrassDecor => BlockBreakCategory::Soil,
+            BlockId::Stone
+            | BlockId::Cobble
+            | BlockId::BrickRed
+            | BlockId::BrickGrey
+            | BlockId::Glowstone => BlockBreakCategory::Stone,
+            BlockId::Wood
+            | BlockId::Planks
+            | BlockId::Trunk
+            | BlockId::TrunkWhite
+            | BlockId::Leaves => BlockBreakCategory::Wood,
+            BlockId::Glass | BlockId::Water | BlockId::Wool => BlockBreakCategory::Soft,
+        }
+    }
+
+    pub fn base_break_seconds(self) -> f32 {
+        match self.break_category() {
+            BlockBreakCategory::Soft => 0.2,
+            BlockBreakCategory::Soil => 0.45,
+            BlockBreakCategory::Wood => 0.55,
+            BlockBreakCategory::Stone => 1.4,
+        }
     }
 
     pub fn texture_indices(self) -> [u32; 3] {
@@ -218,19 +237,3 @@ impl SavedVoxel {
     }
 }
 
-#[derive(Resource, Debug, Clone)]
-pub struct HotbarSelection {
-    pub index: usize,
-}
-
-impl Default for HotbarSelection {
-    fn default() -> Self {
-        Self { index: 0 }
-    }
-}
-
-impl HotbarSelection {
-    pub fn selected_block(&self) -> BlockId {
-        BlockId::HOTBAR[self.index % HOTBAR_SIZE]
-    }
-}

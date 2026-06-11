@@ -4,6 +4,7 @@ mod block;
 mod game_settings;
 mod gamepad;
 mod interaction;
+mod item;
 mod net;
 mod player;
 mod save;
@@ -20,14 +21,15 @@ use bevy_voxel_world::prelude::*;
 
 use audio::GameAudioPlugin;
 use bench::BenchPlugin;
-use block::HotbarSelection;
+use item::{HotbarAssets, HotbarSelection};
 use game_settings::{
     apply_game_speed, reset_game_settings, sync_game_settings_to_network,
     sync_network_game_settings, GameSettings,
 };
 use interaction::{
     apply_pending_to_world, flush_pending_block_edits, handle_block_interaction,
-    update_block_target, BlockTarget, PendingBlockEdits,
+    update_block_break_progress, update_block_target, BlockBreakState, BlockTarget,
+    PendingBlockEdits,
 };
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
@@ -37,7 +39,7 @@ use player::{
     spawn_player, sync_player_camera, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
-use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
+use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_hud, update_network_info};
 use ui::menu::{
     cleanup_menu, menu_button_interaction, menu_input_display, menu_input_focus,
     menu_input_keyboard, menu_input_unfocus, menu_player_name, spawn_main_menu, MenuFocus,
@@ -131,6 +133,7 @@ fn main() {
     .init_resource::<WorldEdits>()
     .init_resource::<PendingBlockEdits>()
     .init_resource::<HotbarSelection>()
+    .init_resource::<BlockBreakState>()
     .init_resource::<NetworkRole>()
     .init_resource::<MenuSettings>()
     .init_resource::<MenuFocus>()
@@ -209,9 +212,10 @@ fn main() {
             follow_sky_to_player,
             update_celestial_bodies.after(follow_sky_to_player),
             update_block_target.after(sync_player_camera),
-            handle_block_interaction,
+            update_block_break_progress.after(update_block_target),
+            handle_block_interaction.after(update_block_break_progress),
+            update_hotbar_hud,
             hotbar_scroll,
-            update_hotbar_text,
             update_network_info,
             auto_save_system,
             save_on_exit,
@@ -273,6 +277,7 @@ fn setup_ui_camera(mut commands: Commands) {
 fn setup_world(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     metadata: Res<WorldMetadata>,
     terrain: Res<ProceduralTerrain>,
     menu_settings: Res<MenuSettings>,
@@ -296,7 +301,7 @@ fn setup_world(
         BlockTarget::default(),
         net::replicate::NetworkPlayer {
             name: player_name.clone(),
-            selected_block: block::BlockId::DirtGrass.as_material(),
+            selected_block: block::BlockId::DirtGrass.as_material(), // synced from hotbar
         },
         net::replicate::NetworkTransform::default(),
     ));
@@ -311,7 +316,19 @@ fn setup_world(
         ));
     }
 
-    spawn_hud(&mut commands);
+    let hotbar_layout = texture_atlas_layouts.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(64),
+        1,
+        item::icon_atlas::ICON_COUNT,
+        None,
+        None,
+    ));
+    let hotbar_assets = HotbarAssets {
+        image: asset_server.load("textures/hotbar_atlas.png"),
+        layout: hotbar_layout,
+    };
+    spawn_hud(&mut commands, &hotbar_assets);
+    commands.insert_resource(hotbar_assets);
 
     let atlas_path = "textures/voxel_atlas.png";
     if !std::path::Path::new("assets").join(atlas_path).exists() {

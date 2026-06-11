@@ -200,7 +200,7 @@ fn spawn_remote_player_visual(
 }
 
 fn sync_local_player_network_data(
-    selection: Res<crate::block::HotbarSelection>,
+    selection: Res<crate::item::HotbarSelection>,
     role: Res<crate::net::NetworkRole>,
     mut players: Query<
         (&Name, &Transform, &mut NetworkPlayer, &mut NetworkTransform),
@@ -211,7 +211,6 @@ fn sync_local_player_network_data(
         return;
     }
 
-    let material = selection.selected_block().as_material();
     let selection_changed = selection.is_changed();
 
     for (name, transform, mut network_player, mut network_transform) in &mut players {
@@ -220,7 +219,9 @@ fn sync_local_player_network_data(
             network_player.name = name_str.to_string();
         }
         if selection_changed {
-            network_player.selected_block = material;
+            if let Some(block) = selection.selected_block() {
+                network_player.selected_block = block.as_material();
+            }
         }
 
         let translation = transform.translation.to_array();
