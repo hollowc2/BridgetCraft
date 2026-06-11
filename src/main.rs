@@ -40,8 +40,8 @@ use ui::menu::{
 };
 use ui::game_menu::{
     cleanup_world, game_menu_button_interaction, game_menu_settings_open, menu_closed,
-    settings_ui, sync_game_menu_content_visibility, toggle_game_menu, GameMenuOpen,
-    GameMenuPanelState,
+    retire_world_chunks, settings_ui, sync_game_menu_content_visibility, toggle_game_menu,
+    GameMenuOpen, GameMenuPanelState,
 };
 use ui::loading::{
     begin_world_load, cleanup_loading_overlay, spawn_loading_overlay, update_loading_progress,
@@ -175,6 +175,7 @@ fn main() {
         OnExit(AppState::InGame),
         (
             flush_pending_block_edits,
+            retire_world_chunks,
             cleanup_world,
             cleanup_loading_overlay,
             release_cursor,

@@ -81,6 +81,28 @@ impl VoxelWorldConfig for BridgetWorld {
     }
 }
 
+/// Euclidean chunk radius large enough to cover the full `(2r+1)²` render square, including corners.
+pub fn spawn_radius_for_render_distance(render_distance: u32) -> u32 {
+    let r = render_distance as i32;
+    let corner_dist_sq = r * r + r * r;
+    (corner_dist_sq as f32).sqrt().ceil() as u32
+}
+
+/// Horizontal chunk columns inside the spawn sphere at the given Euclidean radius.
+pub fn horizontal_spawn_column_count(spawn_radius: u32) -> u32 {
+    let r = spawn_radius as i32;
+    let r_sq = r * r;
+    let mut count = 0u32;
+    for x in -r..=r {
+        for z in -r..=r {
+            if x * x + z * z <= r_sq {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 pub struct VoxelConfigPlugin;
 
 impl Plugin for VoxelConfigPlugin {
@@ -107,7 +129,7 @@ pub fn sync_world_seed(
     }
 
     config.seed = metadata.seed;
-    config.spawning_distance = settings.render_distance;
+    config.spawning_distance = spawn_radius_for_render_distance(settings.render_distance);
 }
 
 #[derive(Resource)]

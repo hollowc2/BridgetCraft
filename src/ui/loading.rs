@@ -2,15 +2,20 @@ use bevy::prelude::*;
 use bevy_voxel_world::prelude::*;
 
 use crate::player::PlayerSettings;
-use crate::voxel_config::BridgetWorld;
+use crate::voxel_config::{horizontal_spawn_column_count, BridgetWorld};
 
 const INITIAL_LOAD_FADE_SECS: f32 = 0.35;
+const LOAD_STALL_DISMISS_SECS: f32 = 2.5;
+const LOAD_ABSOLUTE_TIMEOUT_SECS: f32 = 20.0;
 
 #[derive(Resource)]
 pub struct WorldLoadState {
     pub active: bool,
     pub target_chunks: u32,
     pub loaded_chunks: u32,
+    pub last_meshed_count: u32,
+    pub stalled_secs: f32,
+    pub elapsed_secs: f32,
     pub fade: Timer,
 }
 
@@ -20,6 +25,9 @@ impl Default for WorldLoadState {
             active: false,
             target_chunks: 0,
             loaded_chunks: 0,
+            last_meshed_count: 0,
+            stalled_secs: 0.0,
+            elapsed_secs: 0.0,
             fade: Timer::from_seconds(INITIAL_LOAD_FADE_SECS, TimerMode::Once),
         }
     }
@@ -38,12 +46,16 @@ pub fn begin_world_load(
     mut load_state: ResMut<WorldLoadState>,
     settings: Res<PlayerSettings>,
 ) {
-    let radius = settings.render_distance;
-    let target = (2 * radius + 1).pow(2);
+    // Surface columns near the player are a better progress estimate than the full 3D
+    // spawn sphere; ray-based spawning often leaves a few edge columns without meshes.
+    let target = horizontal_spawn_column_count(settings.render_distance);
     *load_state = WorldLoadState {
         active: true,
         target_chunks: target,
         loaded_chunks: 0,
+        last_meshed_count: 0,
+        stalled_secs: 0.0,
+        elapsed_secs: 0.0,
         fade: Timer::from_seconds(INITIAL_LOAD_FADE_SECS, TimerMode::Once),
     };
 }
@@ -131,7 +143,19 @@ pub fn update_loading_progress(
         return;
     }
 
+    load_state.elapsed_secs += time.delta_secs();
     load_state.loaded_chunks = chunks.iter().count() as u32;
+    if load_state.loaded_chunks != load_state.last_meshed_count {
+        load_state.last_meshed_count = load_state.loaded_chunks;
+        load_state.stalled_secs = 0.0;
+    } else {
+        load_state.stalled_secs += time.delta_secs();
+    }
+
+    if load_state.stalled_secs >= LOAD_STALL_DISMISS_SECS && load_state.loaded_chunks > 0 {
+        load_state.target_chunks = load_state.loaded_chunks;
+    }
+
     let progress = if load_state.target_chunks == 0 {
         1.0
     } else {
@@ -151,7 +175,10 @@ pub fn update_loading_progress(
         );
     }
 
-    let ready = progress >= 0.92 || load_state.loaded_chunks >= load_state.target_chunks;
+    let ready = progress >= 0.92
+        || load_state.loaded_chunks >= load_state.target_chunks
+        || (load_state.stalled_secs >= LOAD_STALL_DISMISS_SECS && load_state.loaded_chunks > 0)
+        || load_state.elapsed_secs >= LOAD_ABSOLUTE_TIMEOUT_SECS;
     if ready {
         load_state.fade.tick(time.delta());
         let alpha = 0.82 * (1.0 - load_state.fade.fraction());
@@ -169,8 +196,10 @@ pub fn update_loading_progress(
 
 pub fn cleanup_loading_overlay(
     mut commands: Commands,
+    mut load_state: ResMut<WorldLoadState>,
     overlay: Query<Entity, With<LoadingOverlay>>,
 ) {
+    *load_state = WorldLoadState::default();
     for entity in &overlay {
         commands.entity(entity).despawn();
     }

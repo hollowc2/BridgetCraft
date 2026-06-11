@@ -2,6 +2,7 @@ use bevy::input::gamepad::GamepadButton;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_replicon::prelude::{SendTargets, ServerTriggerExt, ToClients};
+use bevy_voxel_world::prelude::NeedsDespawn;
 use crate::audio::GameAudio;
 use crate::interaction::PendingBlockEdits;
 use crate::gamepad::select_primary;
@@ -386,6 +387,15 @@ fn despawn_game_menu(
 #[derive(Component)]
 pub struct WorldScene;
 
+pub fn retire_world_chunks(
+    mut commands: Commands,
+    chunks: Query<Entity, (With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>, Without<NeedsDespawn>)>,
+) {
+    for entity in &chunks {
+        commands.entity(entity).insert(NeedsDespawn);
+    }
+}
+
 pub fn cleanup_world(
     mut commands: Commands,
     hud: Query<Entity, With<HudRoot>>,
@@ -395,13 +405,13 @@ pub fn cleanup_world(
     chunk_anchors: Query<Entity, With<crate::player::ChunkSpawnAnchor>>,
     remote_players: Query<Entity, With<RemotePlayerBody>>,
     world_scene: Query<Entity, With<WorldScene>>,
-    chunks: Query<Entity, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
-    retired_chunks: Query<Entity, With<bevy_voxel_world::prelude::NeedsDespawn>>,
     mut open: ResMut<GameMenuOpen>,
     mut panel: ResMut<GameMenuPanelState>,
+    mut config: ResMut<BridgetWorld>,
 ) {
     open.0 = false;
     panel.0 = GameMenuPanel::Main;
+    config.max_spawn_per_frame = BridgetWorld::default().max_spawn_per_frame;
 
     for entity in menu
         .iter()
@@ -411,8 +421,6 @@ pub fn cleanup_world(
         .chain(chunk_anchors.iter())
         .chain(remote_players.iter())
         .chain(world_scene.iter())
-        .chain(chunks.iter())
-        .chain(retired_chunks.iter())
     {
         commands.entity(entity).despawn();
     }
