@@ -41,7 +41,8 @@ use player::{
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
 use net::replicate::{ChatInput, ChatLog};
 use ui::hud::{
-    chat_input_system, hotbar_scroll, spawn_hud, update_chat_hud, update_hotbar_hud,
+    chat_input_system, hotbar_scroll, spawn_hud, update_chat_input_hud, update_chat_log_hud,
+    update_hotbar_hud,
     update_network_info,
 };
 use ui::menu::{
@@ -230,7 +231,8 @@ fn main() {
             update_hotbar_hud,
             hotbar_scroll,
             update_network_info,
-            update_chat_hud,
+            update_chat_log_hud,
+            update_chat_input_hud,
             chat_input_system,
             auto_save_system,
             save_on_exit,

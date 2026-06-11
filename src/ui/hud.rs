@@ -407,25 +407,33 @@ pub fn update_network_info(
     }
 }
 
-pub fn update_chat_hud(
-    chat_log: Res<ChatLog>,
-    chat_input: Res<ChatInput>,
-    mut log_text: Single<&mut Text, With<ChatLogText>>,
-    prompt: Single<(&mut Text, &mut Visibility), With<ChatInputPrompt>>,
-) {
+pub fn update_chat_log_hud(chat_log: Res<ChatLog>, mut log_text: Single<&mut Text, With<ChatLogText>>) {
     if chat_log.is_changed() {
         log_text.0 = chat_log.messages.join("\n");
     }
+}
 
-    if chat_input.is_changed() {
-        let (mut prompt_text, mut visibility) = prompt.into_inner();
-        if chat_input.active {
-            *visibility = Visibility::Visible;
-            prompt_text.0 = format!("> {}", chat_input.buffer);
-        } else {
-            *visibility = Visibility::Hidden;
-            prompt_text.0.clear();
-        }
+pub fn update_chat_input_hud(
+    chat_input: Res<ChatInput>,
+    mut prompt: Query<
+        (&mut Text, &mut Visibility),
+        (With<ChatInputPrompt>, Without<ChatLogText>),
+    >,
+) {
+    if !chat_input.is_changed() {
+        return;
+    }
+
+    let Ok((mut prompt_text, mut visibility)) = prompt.single_mut() else {
+        return;
+    };
+
+    if chat_input.active {
+        *visibility = Visibility::Visible;
+        prompt_text.0 = format!("> {}", chat_input.buffer);
+    } else {
+        *visibility = Visibility::Hidden;
+        prompt_text.0.clear();
     }
 }
 
