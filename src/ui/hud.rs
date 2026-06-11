@@ -203,8 +203,14 @@ pub fn update_hotbar_hud(
     selection: Res<HotbarSelection>,
     break_state: Res<BlockBreakState>,
     slots: Query<(&HotbarSlotIcon, &Children)>,
-    mut borders: Query<&mut Visibility, With<HotbarSelectionBorder>>,
-    mut track: Query<(&mut Visibility, &Children), With<BreakProgressTrack>>,
+    mut borders: Query<
+        &mut Visibility,
+        (With<HotbarSelectionBorder>, Without<BreakProgressTrack>),
+    >,
+    mut track: Query<
+        (&mut Visibility, &Children),
+        (With<BreakProgressTrack>, Without<HotbarSelectionBorder>),
+    >,
     mut fills: Query<&mut Node, With<BreakProgressFill>>,
 ) {
     if selection.is_changed() {
