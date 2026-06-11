@@ -1,5 +1,8 @@
 use bevy::color::Mix;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
+use bevy::light::{
+    CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap, NotShadowCaster,
+    NotShadowReceiver,
+};
 use bevy::prelude::*;
 use crate::player::{Player, PlayerSettings, ShadowQuality};
 use crate::ui::game_menu::WorldScene;
@@ -154,6 +157,8 @@ pub(crate) fn spawn_sky(
                 CelestialBody::Sun,
                 Mesh3d(celestial_mesh.clone()),
                 MeshMaterial3d(sun_material),
+                NotShadowCaster,
+                NotShadowReceiver,
                 Transform::default(),
                 Visibility::Hidden,
                 Name::new("SunSprite"),
@@ -162,6 +167,8 @@ pub(crate) fn spawn_sky(
                 CelestialBody::Moon,
                 Mesh3d(celestial_mesh),
                 MeshMaterial3d(moon_material),
+                NotShadowCaster,
+                NotShadowReceiver,
                 Transform::default(),
                 Visibility::Hidden,
                 Name::new("MoonSprite"),
