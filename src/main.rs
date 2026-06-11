@@ -1,6 +1,7 @@
 mod audio;
 mod bench;
 mod block;
+mod game_settings;
 mod gamepad;
 mod interaction;
 mod net;
@@ -20,6 +21,10 @@ use bevy_voxel_world::prelude::*;
 use audio::GameAudioPlugin;
 use bench::BenchPlugin;
 use block::HotbarSelection;
+use game_settings::{
+    apply_game_speed, reset_game_settings, sync_game_settings_to_network,
+    sync_network_game_settings, GameSettings,
+};
 use interaction::{
     apply_pending_to_world, flush_pending_block_edits, handle_block_interaction,
     update_block_target, BlockTarget, PendingBlockEdits,
@@ -130,6 +135,7 @@ fn main() {
     .init_resource::<MenuSettings>()
     .init_resource::<MenuFocus>()
     .init_resource::<PlayerSettings>()
+    .init_resource::<GameSettings>()
     .init_resource::<SaveTimer>()
     .init_resource::<DayNightCycle>()
     .init_resource::<GameMenuOpen>()
@@ -178,6 +184,7 @@ fn main() {
             retire_world_chunks,
             cleanup_world,
             cleanup_loading_overlay,
+            reset_game_settings,
             release_cursor,
         )
             .chain(),
@@ -212,6 +219,9 @@ fn main() {
             apply_render_settings,
             update_day_night,
             sync_diagnostics_overlay,
+            apply_game_speed,
+            sync_game_settings_to_network.after(apply_game_speed),
+            sync_network_game_settings.after(sync_game_settings_to_network),
         )
             .run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
     )
@@ -294,6 +304,11 @@ fn setup_world(
     if !role.is_client() {
         load_world_edits(&metadata, &mut edits, &mut pending);
         apply_pending_to_world(&mut pending, &mut voxel_world);
+        commands.spawn((
+            bevy_replicon::prelude::Replicated,
+            net::replicate::NetworkGameSettings::default(),
+            Name::new("GameSettings"),
+        ));
     }
 
     spawn_hud(&mut commands);

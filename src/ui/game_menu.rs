@@ -4,6 +4,7 @@ use bevy::window::{CursorGrabMode, CursorOptions};
 use bevy_replicon::prelude::{SendTargets, ServerTriggerExt, ToClients};
 use bevy_voxel_world::prelude::NeedsDespawn;
 use crate::audio::GameAudio;
+use crate::game_settings::GameSettings;
 use crate::interaction::PendingBlockEdits;
 use crate::gamepad::select_primary;
 use crate::net::replicate::{RemotePlayerBody, WorldRevertBroadcast};
@@ -440,7 +441,9 @@ fn set_cursor_grabbed(cursor: &mut Query<&mut CursorOptions>, grabbed: bool) {
 pub fn settings_ui(
     mut contexts: bevy_egui::EguiContexts,
     mut settings: ResMut<PlayerSettings>,
+    mut game_settings: ResMut<GameSettings>,
     mut panel: ResMut<GameMenuPanelState>,
+    role: Res<NetworkRole>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -517,6 +520,25 @@ pub fn settings_ui(
                 ui.label("Double-tap jump to fly; landing ends flight.");
             } else if settings.fly_activation == FlyActivation::Always {
                 ui.label("Space rises, Shift descends.");
+            }
+
+            ui.separator();
+            ui.heading("Game");
+            if role.is_client() {
+                ui.label(format!(
+                    "Game speed: {:.2}x (set by host)",
+                    game_settings.speed
+                ));
+            } else {
+                ui.add(
+                    bevy_egui::egui::Slider::new(
+                        &mut game_settings.speed,
+                        GameSettings::MIN_SPEED..=GameSettings::MAX_SPEED,
+                    )
+                    .text("Game speed")
+                    .suffix("x"),
+                );
+                game_settings.speed = GameSettings::clamp_speed(game_settings.speed);
             }
 
             ui.separator();

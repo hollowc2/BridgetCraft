@@ -43,12 +43,25 @@ pub struct BlockEditBroadcast {
 #[derive(Event, Serialize, Deserialize, Clone, Copy)]
 pub struct WorldRevertBroadcast;
 
+#[derive(Component, Serialize, Deserialize, Clone, Copy)]
+#[require(Replicated)]
+pub struct NetworkGameSettings {
+    pub speed: f32,
+}
+
+impl Default for NetworkGameSettings {
+    fn default() -> Self {
+        Self { speed: 1.0 }
+    }
+}
+
 pub struct ReplicatePlugin;
 
 impl Plugin for ReplicatePlugin {
     fn build(&self, app: &mut App) {
         app.replicate::<NetworkPlayer>()
             .replicate::<NetworkTransform>()
+            .replicate::<NetworkGameSettings>()
             .add_client_event::<BlockEditRequest>(Channel::Unordered)
             .add_server_event::<BlockEditBroadcast>(Channel::Unordered)
             .add_server_event::<WorldRevertBroadcast>(Channel::Unordered)
