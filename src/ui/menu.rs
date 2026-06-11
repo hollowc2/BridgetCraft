@@ -60,7 +60,7 @@ pub struct MenuButton(&'static str);
 pub struct MenuTextInput(pub MenuInputField);
 
 #[derive(Component)]
-pub struct MenuInputLabel;
+pub struct MenuInputLabel(pub MenuInputField);
 
 pub fn spawn_main_menu(mut commands: Commands, settings: Res<MenuSettings>) {
     commands
@@ -168,7 +168,7 @@ fn spawn_text_input(
             BackgroundColor(Color::srgba(0.15, 0.2, 0.28, 0.85)),
         ))
         .with_child((
-            MenuInputLabel,
+            MenuInputLabel(field),
             Text::new(format!("{label}: {value}")),
             TextFont {
                 font_size: 20.0,
@@ -276,7 +276,7 @@ pub fn menu_input_display(
     time: Res<Time>,
     mut focus: ResMut<MenuFocus>,
     settings: Res<MenuSettings>,
-    mut labels: Query<(&MenuTextInput, &mut Text, &mut TextColor), With<MenuInputLabel>>,
+    mut labels: Query<(&MenuInputLabel, &mut Text, &mut TextColor)>,
     mut backgrounds: Query<(&MenuTextInput, &mut BackgroundColor), With<Button>>,
 ) {
     focus.cursor_blink.tick(time.delta());
@@ -288,7 +288,7 @@ pub fn menu_input_display(
         if focus.active == Some(input.0) && show_cursor {
             display.push('|');
         }
-        **text = display;
+        text.0 = display;
         *color = if focus.active == Some(input.0) {
             TextColor(Color::srgb(0.95, 0.98, 1.0))
         } else {
