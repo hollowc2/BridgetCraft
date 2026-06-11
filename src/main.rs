@@ -11,7 +11,7 @@ mod ui;
 mod voxel_config;
 mod world_gen;
 
-use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin, FPS_OVERLAY_ZINDEX};
 use bevy::prelude::*;
 use bevy::window::PresentMode;
 use bevy_egui::{EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext};
@@ -29,7 +29,7 @@ use net::{NetworkPlugin, NetworkRole};
 use player::{
     apply_render_settings, apply_render_settings_on_enter, find_spawn_position, grab_cursor,
     lead_chunk_spawn_anchor, mouse_look, player_movement, release_cursor, spawn_chunk_anchor,
-    spawn_player, sync_player_camera, FlyActivation, GravityMode, PlayerSettings, VsyncMode,
+    spawn_player, sync_player_camera, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
 use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_text, update_network_info};
@@ -39,7 +39,9 @@ use ui::menu::{
     MenuSettings,
 };
 use ui::game_menu::{
-    cleanup_world, game_menu_button_interaction, menu_closed, toggle_game_menu, GameMenuOpen,
+    cleanup_world, game_menu_button_interaction, game_menu_settings_open, menu_closed,
+    settings_ui, sync_game_menu_content_visibility, toggle_game_menu, GameMenuOpen,
+    GameMenuPanelState,
 };
 use ui::loading::{
     begin_world_load, cleanup_loading_overlay, spawn_loading_overlay, update_loading_progress,
@@ -131,6 +133,7 @@ fn main() {
     .init_resource::<SaveTimer>()
     .init_resource::<DayNightCycle>()
     .init_resource::<GameMenuOpen>()
+    .init_resource::<GameMenuPanelState>()
     .init_resource::<WorldLoadState>()
     .insert_resource(Time::<Fixed>::from_hz(60.0))
     .add_systems(Startup, setup_ui_camera)
@@ -178,10 +181,16 @@ fn main() {
         )
             .chain(),
     )
+    .add_systems(Startup, position_fps_overlay)
     .add_systems(Update, (toggle_performance_overlay, warn_if_voxel_atlas_failed))
     .add_systems(
         Update,
-        (toggle_game_menu, game_menu_button_interaction).run_if(in_state(AppState::InGame)),
+        (
+            toggle_game_menu,
+            game_menu_button_interaction,
+            sync_game_menu_content_visibility,
+        )
+            .run_if(in_state(AppState::InGame)),
     )
     .add_systems(
         Update,
@@ -207,7 +216,7 @@ fn main() {
     )
     .add_systems(
         EguiPrimaryContextPass,
-        settings_ui.run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
+        settings_ui.run_if(in_state(AppState::InGame).and(game_menu_settings_open).and(not_loading)),
     )
     .add_systems(
         Update,
@@ -299,88 +308,6 @@ fn setup_world(
     info!("world '{}' ready (seed {})", metadata.name, metadata.seed);
 }
 
-fn settings_ui(
-    mut contexts: bevy_egui::EguiContexts,
-    mut settings: ResMut<PlayerSettings>,
-) {
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-
-    bevy_egui::egui::Window::new("Settings")
-        .default_pos(bevy_egui::egui::pos2(12.0, 120.0))
-        .show(ctx, |ui| {
-            ui.label("Performance and controls");
-            ui.add(
-                bevy_egui::egui::Slider::new(&mut settings.render_distance, 3..=8)
-                    .text("Render distance"),
-            );
-            ui.horizontal(|ui| {
-                ui.label("Shadow quality:");
-                for quality in crate::player::ShadowQuality::ALL {
-                    ui.selectable_value(
-                        &mut settings.shadow_quality,
-                        quality,
-                        quality.label(),
-                    );
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("MSAA:");
-                // MSAA Off breaks bevy_voxel_world chunk rendering; offer 2x/4x only.
-                for samples in [
-                    bevy::render::view::Msaa::Sample2,
-                    bevy::render::view::Msaa::Sample4,
-                ] {
-                    let label = match samples {
-                        bevy::render::view::Msaa::Sample2 => "2x",
-                        bevy::render::view::Msaa::Sample4 => "4x",
-                        _ => "Other",
-                    };
-                    ui.selectable_value(&mut settings.msaa, samples, label);
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("VSync:");
-                for mode in VsyncMode::ALL {
-                    ui.selectable_value(&mut settings.vsync_mode, mode, mode.label());
-                }
-            });
-            ui.checkbox(
-                &mut settings.show_diagnostics,
-                "Show FPS overlay (F1)",
-            );
-            ui.add(
-                bevy_egui::egui::Slider::new(&mut settings.mouse_sensitivity, 0.0005..=0.01)
-                    .text("Mouse sensitivity"),
-            );
-            ui.add(
-                bevy_egui::egui::Slider::new(&mut settings.gamepad_look_sensitivity, 0.5..=6.0)
-                    .text("Gamepad look sensitivity"),
-            );
-
-            ui.separator();
-            ui.label("Movement");
-            ui.horizontal(|ui| {
-                ui.label("Gravity:");
-                for mode in GravityMode::ALL {
-                    ui.selectable_value(&mut settings.gravity_mode, mode, mode.label());
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Fly mode:");
-                for mode in FlyActivation::ALL {
-                    ui.selectable_value(&mut settings.fly_activation, mode, mode.label());
-                }
-            });
-            if settings.fly_activation == FlyActivation::DoubleTap {
-                ui.label("Double-tap jump to fly; landing ends flight.");
-            } else if settings.fly_activation == FlyActivation::Always {
-                ui.label("Space rises, Shift descends.");
-            }
-        });
-}
-
 fn warn_if_voxel_atlas_failed(
     asset_server: Res<AssetServer>,
     atlas: Option<Res<VoxelAtlasHandle>>,
@@ -403,6 +330,18 @@ fn warn_if_voxel_atlas_failed(
         }
         Some(bevy::asset::LoadState::Loaded) => *warned = true,
         _ => {}
+    }
+}
+
+fn position_fps_overlay(mut query: Query<(&GlobalZIndex, &mut Node)>) {
+    for (z_index, mut node) in &mut query {
+        if z_index.0 != FPS_OVERLAY_ZINDEX {
+            continue;
+        }
+        node.top = Val::Px(12.0);
+        node.right = Val::Px(12.0);
+        node.left = Val::Auto;
+        node.align_items = AlignItems::FlexEnd;
     }
 }
 

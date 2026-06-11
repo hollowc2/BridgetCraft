@@ -7,7 +7,9 @@ use crate::interaction::PendingBlockEdits;
 use crate::gamepad::select_primary;
 use crate::net::replicate::{RemotePlayerBody, WorldRevertBroadcast};
 use crate::net::NetworkRole;
-use crate::player::{Player, PlayerCamera};
+use crate::player::{
+    FlyActivation, GravityMode, Player, PlayerCamera, PlayerSettings, ShadowQuality, VsyncMode,
+};
 use crate::save::{revert_to_world_base, save_world, WorldEdits};
 use crate::voxel_config::BridgetWorld;
 use crate::world_gen::WorldMetadata;
@@ -18,8 +20,21 @@ use super::hud::HudRoot;
 #[derive(Resource, Default)]
 pub struct GameMenuOpen(pub bool);
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum GameMenuPanel {
+    #[default]
+    Main,
+    Settings,
+}
+
+#[derive(Resource, Default)]
+pub struct GameMenuPanelState(pub GameMenuPanel);
+
 #[derive(Component)]
 pub struct GameMenuRoot;
+
+#[derive(Component)]
+pub(crate) struct GameMenuContent;
 
 #[derive(Component)]
 pub struct GameMenuButton(&'static str);
@@ -31,11 +46,19 @@ pub fn menu_closed(open: Res<GameMenuOpen>) -> bool {
     !open.0
 }
 
+pub fn game_menu_settings_open(
+    open: Res<GameMenuOpen>,
+    panel: Res<GameMenuPanelState>,
+) -> bool {
+    open.0 && panel.0 == GameMenuPanel::Settings
+}
+
 pub fn toggle_game_menu(
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
     role: Res<NetworkRole>,
     mut open: ResMut<GameMenuOpen>,
+    mut panel: ResMut<GameMenuPanelState>,
     mut cursor: Query<&mut CursorOptions>,
     mut commands: Commands,
     menu: Query<Entity, With<GameMenuRoot>>,
@@ -48,16 +71,37 @@ pub fn toggle_game_menu(
         return;
     }
 
-    open.0 = !open.0;
-
     if open.0 {
+        if panel.0 == GameMenuPanel::Settings {
+            panel.0 = GameMenuPanel::Main;
+            return;
+        }
+
+        open.0 = false;
+        panel.0 = GameMenuPanel::Main;
+        set_cursor_grabbed(&mut cursor, true);
+        despawn_game_menu(&mut commands, &menu, &confirm);
+    } else {
+        open.0 = true;
+        panel.0 = GameMenuPanel::Main;
         set_cursor_grabbed(&mut cursor, false);
         if menu.is_empty() {
             spawn_game_menu(&mut commands, &role);
         }
-    } else {
-        set_cursor_grabbed(&mut cursor, true);
-        despawn_game_menu(&mut commands, &menu, &confirm);
+    }
+}
+
+pub fn sync_game_menu_content_visibility(
+    panel: Res<GameMenuPanelState>,
+    mut content: Query<&mut Visibility, With<GameMenuContent>>,
+) {
+    let visible = panel.0 == GameMenuPanel::Main;
+    for mut visibility in &mut content {
+        *visibility = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -67,6 +111,7 @@ pub fn game_menu_button_interaction(
         (Changed<Interaction>, With<Button>),
     >,
     mut open: ResMut<GameMenuOpen>,
+    mut panel: ResMut<GameMenuPanelState>,
     mut next_state: ResMut<NextState<AppState>>,
     metadata: Res<WorldMetadata>,
     mut edits: ResMut<WorldEdits>,
@@ -87,8 +132,12 @@ pub fn game_menu_button_interaction(
                 match button.0 {
                     "keep_playing" => {
                         open.0 = false;
+                        panel.0 = GameMenuPanel::Main;
                         set_cursor_grabbed(&mut cursor, true);
                         despawn_game_menu(&mut commands, &menu, &confirm);
+                    }
+                    "settings" => {
+                        panel.0 = GameMenuPanel::Settings;
                     }
                     "revert_prompt" => {
                         if confirm.is_empty() {
@@ -121,6 +170,7 @@ pub fn game_menu_button_interaction(
                             warn!("save before returning to menu failed: {err}");
                         }
                         open.0 = false;
+                        panel.0 = GameMenuPanel::Main;
                         despawn_game_menu(&mut commands, &menu, &confirm);
                         next_state.set(AppState::MainMenu);
                     }
@@ -129,6 +179,7 @@ pub fn game_menu_button_interaction(
                             warn!("save before quitting failed: {err}");
                         }
                         open.0 = false;
+                        panel.0 = GameMenuPanel::Main;
                         exit.write(AppExit::Success);
                     }
                     _ => {}
@@ -162,6 +213,7 @@ pub fn spawn_game_menu(commands: &mut Commands, role: &NetworkRole) {
         .with_children(|parent| {
             parent
                 .spawn((
+                    GameMenuContent,
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -183,6 +235,7 @@ pub fn spawn_game_menu(commands: &mut Commands, role: &NetworkRole) {
 
                     let mut buttons = vec![
                         ("Keep Playing", "keep_playing"),
+                        ("Settings", "settings"),
                         ("Main Menu", "main_menu"),
                         ("Quit Game", "quit"),
                     ];
@@ -345,8 +398,10 @@ pub fn cleanup_world(
     chunks: Query<Entity, With<bevy_voxel_world::prelude::Chunk<BridgetWorld>>>,
     retired_chunks: Query<Entity, With<bevy_voxel_world::prelude::NeedsDespawn>>,
     mut open: ResMut<GameMenuOpen>,
+    mut panel: ResMut<GameMenuPanelState>,
 ) {
     open.0 = false;
+    panel.0 = GameMenuPanel::Main;
 
     for entity in menu
         .iter()
@@ -372,4 +427,94 @@ fn set_cursor_grabbed(cursor: &mut Query<&mut CursorOptions>, grabbed: bool) {
             CursorGrabMode::None
         };
     }
+}
+
+pub fn settings_ui(
+    mut contexts: bevy_egui::EguiContexts,
+    mut settings: ResMut<PlayerSettings>,
+    mut panel: ResMut<GameMenuPanelState>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+
+    bevy_egui::egui::Window::new("Settings")
+        .collapsible(false)
+        .anchor(bevy_egui::egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label("Performance and controls");
+            ui.add(
+                bevy_egui::egui::Slider::new(&mut settings.render_distance, 3..=8)
+                    .text("Render distance"),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Shadow quality:");
+                for quality in ShadowQuality::ALL {
+                    ui.selectable_value(
+                        &mut settings.shadow_quality,
+                        quality,
+                        quality.label(),
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("MSAA:");
+                // MSAA Off breaks bevy_voxel_world chunk rendering; offer 2x/4x only.
+                for samples in [
+                    bevy::render::view::Msaa::Sample2,
+                    bevy::render::view::Msaa::Sample4,
+                ] {
+                    let label = match samples {
+                        bevy::render::view::Msaa::Sample2 => "2x",
+                        bevy::render::view::Msaa::Sample4 => "4x",
+                        _ => "Other",
+                    };
+                    ui.selectable_value(&mut settings.msaa, samples, label);
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("VSync:");
+                for mode in VsyncMode::ALL {
+                    ui.selectable_value(&mut settings.vsync_mode, mode, mode.label());
+                }
+            });
+            ui.checkbox(
+                &mut settings.show_diagnostics,
+                "Show FPS overlay (F1)",
+            );
+            ui.add(
+                bevy_egui::egui::Slider::new(&mut settings.mouse_sensitivity, 0.0005..=0.01)
+                    .text("Mouse sensitivity"),
+            );
+            ui.add(
+                bevy_egui::egui::Slider::new(&mut settings.gamepad_look_sensitivity, 0.5..=6.0)
+                    .text("Gamepad look sensitivity"),
+            );
+
+            ui.separator();
+            ui.label("Movement");
+            ui.horizontal(|ui| {
+                ui.label("Gravity:");
+                for mode in GravityMode::ALL {
+                    ui.selectable_value(&mut settings.gravity_mode, mode, mode.label());
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Fly mode:");
+                for mode in FlyActivation::ALL {
+                    ui.selectable_value(&mut settings.fly_activation, mode, mode.label());
+                }
+            });
+            if settings.fly_activation == FlyActivation::DoubleTap {
+                ui.label("Double-tap jump to fly; landing ends flight.");
+            } else if settings.fly_activation == FlyActivation::Always {
+                ui.label("Space rises, Shift descends.");
+            }
+
+            ui.separator();
+            if ui.button("Back to Game Menu").clicked() {
+                panel.0 = GameMenuPanel::Main;
+            }
+            ui.label("Escape to go back");
+        });
 }

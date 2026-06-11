@@ -75,7 +75,8 @@ pub fn spawn_hud(commands: &mut Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
-                left: Val::Px(12.0),
+                right: Val::Px(12.0),
+                align_items: AlignItems::FlexEnd,
                 ..Default::default()
             },
             HudRoot,
