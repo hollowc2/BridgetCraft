@@ -314,14 +314,18 @@ fn setup_world(
 
     let (player, _camera) = spawn_player(&mut commands, &player_name, spawn, &settings);
     spawn_chunk_anchor(&mut commands, spawn);
-    commands.entity(player).insert((
-        BlockTarget::default(),
-        net::replicate::NetworkPlayer {
-            name: player_name.clone(),
-            selected_block: block::BlockId::DirtGrass.as_material(), // synced from hotbar
-        },
-        net::replicate::NetworkTransform::default(),
-    ));
+    if role.is_host() {
+        commands.entity(player).insert((
+            BlockTarget::default(),
+            net::replicate::NetworkPlayer {
+                name: player_name.clone(),
+                selected_block: block::BlockId::DirtGrass.as_material(), // synced from hotbar
+            },
+            net::replicate::NetworkTransform::default(),
+        ));
+    } else {
+        commands.entity(player).insert(BlockTarget::default());
+    }
 
     if !role.is_client() {
         load_world_edits(&metadata, &mut edits, &mut pending);

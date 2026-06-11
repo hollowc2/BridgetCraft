@@ -10,10 +10,11 @@ use crate::interaction::{apply_block_edit, PendingBlockEdits};
 use crate::player::Player;
 use crate::save::{revert_to_world_base, WorldEdits};
 use crate::voxel_config::BridgetWorld;
+use crate::player::find_spawn_position;
 use crate::world_gen::{ProceduralTerrain, WorldMetadata};
 
 #[derive(Component, Serialize, Deserialize, Clone)]
-#[require(Replicated)]
+#[require(Replicated, Transform, Visibility)]
 pub struct NetworkPlayer {
     pub name: String,
     pub selected_block: u8,
@@ -28,6 +29,20 @@ pub struct NetworkTransform {
 
 #[derive(Component)]
 pub struct RemotePlayerBody;
+
+/// Server-side avatar for a connected client. Replicates to all peers.
+#[derive(Component)]
+pub struct ClientAvatar {
+    pub client: Entity,
+}
+
+#[derive(Event, Serialize, Deserialize, Clone)]
+pub struct PlayerStateUpdate {
+    pub name: String,
+    pub translation: [f32; 3],
+    pub yaw: f32,
+    pub selected_block: u8,
+}
 
 #[derive(Event, Serialize, Deserialize, Clone, Copy)]
 pub struct BlockEditRequest {
@@ -108,17 +123,23 @@ impl Plugin for ReplicatePlugin {
             .add_server_event::<BlockEditBroadcast>(Channel::Unordered)
             .add_server_event::<WorldRevertBroadcast>(Channel::Unordered)
             .add_client_event::<ClientChatMessage>(Channel::Unordered)
+            .add_client_event::<PlayerStateUpdate>(Channel::Unordered)
             .add_server_event::<ChatBroadcast>(Channel::Unordered)
             .add_observer(apply_remote_block_edit)
             .add_observer(apply_block_edit_broadcast)
             .add_observer(apply_world_revert_broadcast)
             .add_observer(relay_client_chat)
             .add_observer(apply_chat_broadcast)
+            .add_observer(spawn_client_avatar)
+            .add_observer(despawn_client_avatar)
+            .add_observer(apply_player_state_update)
             .add_observer(spawn_remote_player_visual)
             .add_systems(
                 Update,
                 (
                     sync_local_player_network_data,
+                    send_client_player_state,
+                    init_remote_transforms,
                     sync_network_transforms,
                     update_held_block_cubes,
                     tag_remote_players,
@@ -227,13 +248,134 @@ fn apply_world_revert_broadcast(
     }
 }
 
+fn spawn_client_avatar(
+    add: On<Add, AuthorizedClient>,
+    mut commands: Commands,
+    role: Res<crate::net::NetworkRole>,
+    terrain: Res<ProceduralTerrain>,
+) {
+    if !role.is_host() {
+        return;
+    }
+
+    let mut spawn = find_spawn_position(&terrain);
+    spawn.x += 2.0;
+
+    commands.spawn((
+        Replicated,
+        ClientAvatar { client: add.entity },
+        NetworkPlayer {
+            name: "Connecting...".to_string(),
+            selected_block: BlockId::DirtGrass.as_material(),
+        },
+        NetworkTransform {
+            translation: spawn.to_array(),
+            yaw: 0.0,
+        },
+        Transform::from_translation(spawn),
+        Visibility::default(),
+        Name::new("Client avatar"),
+    ));
+}
+
+fn despawn_client_avatar(
+    remove: On<Remove, ConnectedClient>,
+    mut commands: Commands,
+    role: Res<crate::net::NetworkRole>,
+    avatars: Query<(Entity, &ClientAvatar)>,
+) {
+    if !role.is_host() {
+        return;
+    }
+
+    for (entity, avatar) in &avatars {
+        if avatar.client == remove.entity {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn apply_player_state_update(
+    update: On<FromClient<PlayerStateUpdate>>,
+    role: Res<crate::net::NetworkRole>,
+    mut avatars: Query<(&ClientAvatar, &mut NetworkPlayer, &mut NetworkTransform, &mut Transform)>,
+) {
+    if !role.is_host() {
+        return;
+    }
+
+    let ClientId::Client(client_entity) = update.client_id else {
+        return;
+    };
+
+    let name = update.name.trim();
+    if name.is_empty() || name.len() > 32 {
+        return;
+    }
+
+    for (avatar, mut player, mut network_transform, mut transform) in &mut avatars {
+        if avatar.client != client_entity {
+            continue;
+        }
+
+        player.name = name.to_string();
+        player.selected_block = update.selected_block;
+        network_transform.translation = update.translation;
+        network_transform.yaw = update.yaw;
+        transform.translation = Vec3::from_array(update.translation);
+        transform.rotation = Quat::from_rotation_y(update.yaw);
+        return;
+    }
+}
+
+fn send_client_player_state(
+    role: Res<crate::net::NetworkRole>,
+    selection: Res<crate::item::HotbarSelection>,
+    players: Query<(&Name, &Transform), With<Player>>,
+    mut commands: Commands,
+) {
+    if !role.is_client() {
+        return;
+    }
+
+    let Ok((name, transform)) = players.single() else {
+        return;
+    };
+
+    let selected_block = selection
+        .selected_block()
+        .map(|block| block.as_material())
+        .unwrap_or_else(|| BlockId::DirtGrass.as_material());
+
+    let yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
+    commands.client_trigger(PlayerStateUpdate {
+        name: name.as_str().to_string(),
+        translation: transform.translation.to_array(),
+        yaw,
+        selected_block,
+    });
+}
+
+fn init_remote_transforms(
+    mut players: Query<
+        (&NetworkTransform, &mut Transform),
+        (Added<NetworkPlayer>, Without<Player>),
+    >,
+) {
+    for (network_transform, mut transform) in &mut players {
+        transform.translation = Vec3::from_array(network_transform.translation);
+        transform.rotation = Quat::from_rotation_y(network_transform.yaw);
+    }
+}
+
 fn spawn_remote_player_visual(
     add: On<Add, RemotePlayerBody>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     players: Query<&NetworkPlayer>,
-    local: Query<(), With<Player>>,
+    local: Query<&Name, With<Player>>,
+    role: Res<crate::net::NetworkRole>,
 ) {
     if local.get(add.entity).is_ok() {
         return;
@@ -242,6 +384,14 @@ fn spawn_remote_player_visual(
     let Ok(network_player) = players.get(add.entity) else {
         return;
     };
+
+    if role.is_client() {
+        if let Ok(local_name) = local.single() {
+            if network_player.name == local_name.as_str() {
+                return;
+            }
+        }
+    }
 
     let body_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.72, 0.45, 0.32),
@@ -318,7 +468,7 @@ fn sync_local_player_network_data(
         With<Player>,
     >,
 ) {
-    if matches!(*role, crate::net::NetworkRole::None) {
+    if !role.is_host() {
         return;
     }
 
