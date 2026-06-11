@@ -3,6 +3,7 @@ use bevy::input::ButtonState;
 use bevy::prelude::*;
 
 use crate::audio::GameAudio;
+use crate::game_settings::GameSettings;
 use crate::net::NetworkRole;
 use crate::world_gen::WorldMetadata;
 use crate::AppState;
@@ -312,13 +313,14 @@ pub fn menu_button_interaction(
     settings: Res<MenuSettings>,
     mut focus: ResMut<MenuFocus>,
     mut exit: MessageWriter<AppExit>,
+    game_settings: Res<GameSettings>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
     for (interaction, button, mut color) in &mut interaction_query {
         match *interaction {
             Interaction::Pressed => {
-                audio.play_ui_click(&mut commands);
+                audio.play_ui_click(&mut commands, &game_settings);
                 *color = Color::srgb(0.15, 0.35, 0.6).into();
                 focus.active = None;
                 match button.0 {
@@ -354,7 +356,7 @@ pub fn menu_button_interaction(
                 }
             }
             Interaction::Hovered => {
-                audio.play_ui_rollover(&mut commands);
+                audio.play_ui_rollover(&mut commands, &game_settings);
                 *color = Color::srgb(0.25, 0.55, 0.85).into();
             }
             Interaction::None => {

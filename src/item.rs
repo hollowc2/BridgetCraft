@@ -94,11 +94,11 @@ pub const HOTBAR: [HotbarSlot; HOTBAR_SIZE] = [
     HotbarSlot::Tool(ToolId::Shovel),
     HotbarSlot::Block(BlockId::Stone),
     HotbarSlot::Tool(ToolId::Pick),
-    HotbarSlot::Block(BlockId::Wood),
+    HotbarSlot::Block(BlockId::Cobble),
     HotbarSlot::Tool(ToolId::Axe),
-    HotbarSlot::Block(BlockId::Sand),
-    HotbarSlot::Block(BlockId::Leaves),
-    HotbarSlot::Block(BlockId::Glowstone),
+    HotbarSlot::Block(BlockId::Glass),
+    HotbarSlot::Block(BlockId::Planks),
+    HotbarSlot::Block(BlockId::BrickRed),
 ];
 
 pub fn block_break_seconds(block: BlockId, slot: HotbarSlot) -> f32 {

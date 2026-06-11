@@ -2,6 +2,7 @@ use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, V
 use bevy::prelude::*;
 
 use crate::block::BlockId;
+use crate::game_settings::GameSettings;
 use crate::world_gen::ProceduralTerrain;
 use crate::voxel_config::BridgetWorld;
 use bevy_voxel_world::prelude::*;
@@ -89,26 +90,27 @@ fn load_variants(asset_server: &AssetServer, prefix: &str, count: usize) -> Vec<
 }
 
 impl GameAudio {
-    pub fn play_ui_click(&mut self, commands: &mut Commands) {
-        play_oneshot(commands, &self.ui_click, 0.55);
+    pub fn play_ui_click(&mut self, commands: &mut Commands, settings: &GameSettings) {
+        play_oneshot(commands, &self.ui_click, settings.ui_level(0.55));
     }
 
-    pub fn play_ui_rollover(&mut self, commands: &mut Commands) {
-        play_oneshot(commands, &self.ui_rollover, 0.35);
+    pub fn play_ui_rollover(&mut self, commands: &mut Commands, settings: &GameSettings) {
+        play_oneshot(commands, &self.ui_rollover, settings.ui_level(0.35));
     }
 
     pub fn play_footstep_at_feet(
         &mut self,
         commands: &mut Commands,
+        settings: &GameSettings,
         voxel_world: &VoxelWorld<BridgetWorld>,
         terrain: &ProceduralTerrain,
         feet_position: Vec3,
     ) {
         let surface = footstep_surface_at_feet(voxel_world, terrain, feet_position);
-        self.play_footstep(commands, surface);
+        self.play_footstep(commands, settings, surface);
     }
 
-    fn play_footstep(&mut self, commands: &mut Commands, surface: FootstepSurface) {
+    fn play_footstep(&mut self, commands: &mut Commands, settings: &GameSettings, surface: FootstepSurface) {
         let len = match surface {
             FootstepSurface::Grass => self.footstep_grass.len(),
             FootstepSurface::Concrete => self.footstep_concrete.len(),
@@ -125,11 +127,17 @@ impl GameAudio {
             FootstepSurface::Carpet => self.footstep_carpet.get(index),
         };
         if let Some(handle) = handle {
-            play_oneshot(commands, handle, 0.42);
+            play_oneshot(commands, handle, settings.sfx_level(0.42));
         }
     }
 
-    pub fn play_block_break(&mut self, commands: &mut Commands, block: BlockId, position: IVec3) {
+    pub fn play_block_break(
+        &mut self,
+        commands: &mut Commands,
+        settings: &GameSettings,
+        block: BlockId,
+        position: IVec3,
+    ) {
         let impact = block_impact(block);
         let len = match impact {
             BlockImpact::Mining => self.break_mining.len(),
@@ -147,11 +155,17 @@ impl GameAudio {
             BlockImpact::Metal => self.break_metal.get(index),
         };
         if let Some(handle) = handle {
-            play_spatial_oneshot(commands, handle, 0.72, position);
+            play_spatial_oneshot(commands, handle, settings.sfx_level(0.72), position);
         }
     }
 
-    pub fn play_block_place(&mut self, commands: &mut Commands, block: BlockId, position: IVec3) {
+    pub fn play_block_place(
+        &mut self,
+        commands: &mut Commands,
+        settings: &GameSettings,
+        block: BlockId,
+        position: IVec3,
+    ) {
         let impact = block_impact(block);
         let len = match impact {
             BlockImpact::Mining => self.place_generic.len(),
@@ -169,7 +183,7 @@ impl GameAudio {
             BlockImpact::Metal => self.place_metal.get(index),
         };
         if let Some(handle) = handle {
-            play_spatial_oneshot(commands, handle, 0.58, position);
+            play_spatial_oneshot(commands, handle, settings.sfx_level(0.58), position);
         }
     }
 

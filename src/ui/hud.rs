@@ -1,10 +1,17 @@
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 
 use crate::gamepad::select_primary;
 use crate::interaction::BlockBreakState;
 use crate::item::{HotbarAssets, HotbarSelection, HOTBAR, HOTBAR_SIZE};
+use crate::net::replicate::{
+    ChatBroadcast, ChatInput, ChatLog, ClientChatMessage, NetworkPlayer, CHAT_MAX_MESSAGE_LEN,
+};
 use crate::net::NetworkRole;
-use crate::player::PlayerSettings;
+use crate::player::{Player, PlayerSettings};
+use crate::ui::game_menu::GameMenuOpen;
+use bevy_replicon::prelude::{ClientTriggerExt, SendTargets, ServerTriggerExt, ToClients};
 
 const SLOT_SIZE: f32 = 52.0;
 const SLOT_GAP: f32 = 4.0;
@@ -27,6 +34,9 @@ pub struct HotbarSlotIcon {
 pub struct HotbarSelectionBorder;
 
 #[derive(Component)]
+pub struct HotbarSlotLabel;
+
+#[derive(Component)]
 pub struct BreakProgressTrack;
 
 #[derive(Component)]
@@ -34,6 +44,12 @@ pub struct BreakProgressFill;
 
 #[derive(Component)]
 pub struct NetworkInfoText;
+
+#[derive(Component)]
+pub struct ChatLogText;
+
+#[derive(Component)]
+pub struct ChatInputPrompt;
 
 pub fn spawn_hud(commands: &mut Commands, hotbar_assets: &HotbarAssets) {
     commands
@@ -94,6 +110,9 @@ pub fn spawn_hud(commands: &mut Commands, hotbar_assets: &HotbarAssets) {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(24.0),
                 justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(6.0),
                 ..Default::default()
             },
             HudRoot,
@@ -168,6 +187,21 @@ pub fn spawn_hud(commands: &mut Commands, hotbar_assets: &HotbarAssets) {
                         });
                     }
                 });
+
+            parent.spawn((
+                HotbarSlotLabel,
+                Text::new(HOTBAR[0].label()),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.92, 0.96, 1.0)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                Node {
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                    ..Default::default()
+                },
+            ));
         });
 
     commands
@@ -197,6 +231,51 @@ pub fn spawn_hud(commands: &mut Commands, hotbar_assets: &HotbarAssets) {
                 },
             ));
         });
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(12.0),
+                bottom: Val::Px(96.0),
+                max_width: Val::Px(420.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..Default::default()
+            },
+            HudRoot,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                ChatLogText,
+                Text::new(""),
+                TextFont {
+                    font_size: 14.0,
+                    ..Default::default()
+                },
+                TextColor(Color::srgb(0.9, 0.95, 1.0)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
+                Node {
+                    padding: UiRect::all(Val::Px(6.0)),
+                    ..Default::default()
+                },
+            ));
+            parent.spawn((
+                ChatInputPrompt,
+                Text::new(""),
+                TextFont {
+                    font_size: 14.0,
+                    ..Default::default()
+                },
+                TextColor(Color::srgb(0.75, 0.85, 1.0)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                Node {
+                    padding: UiRect::all(Val::Px(6.0)),
+                    ..Default::default()
+                },
+                Visibility::Hidden,
+            ));
+        });
 }
 
 pub fn update_hotbar_hud(
@@ -212,8 +291,11 @@ pub fn update_hotbar_hud(
         (With<BreakProgressTrack>, Without<HotbarSelectionBorder>),
     >,
     mut fills: Query<&mut Node, With<BreakProgressFill>>,
+    mut label: Single<&mut Text, With<HotbarSlotLabel>>,
 ) {
     if selection.is_changed() {
+        label.0 = HOTBAR[selection.index].label().to_string();
+
         for (slot, children) in &slots {
             let visible = slot.index == selection.index;
             for child in children.iter() {
@@ -249,7 +331,12 @@ pub fn hotbar_scroll(
     mut selection: ResMut<HotbarSelection>,
     keys: Res<ButtonInput<KeyCode>>,
     gamepads: Query<(&Name, &Gamepad)>,
+    chat_input: Res<ChatInput>,
 ) {
+    if chat_input.active {
+        return;
+    }
+
     for event in wheel.read() {
         if event.y > 0.0 {
             selection.index = (selection.index + HOTBAR_SIZE - 1) % HOTBAR_SIZE;
@@ -288,12 +375,10 @@ pub fn hotbar_scroll(
 pub fn update_network_info(
     role: Res<NetworkRole>,
     settings: Res<PlayerSettings>,
+    players: Query<&NetworkPlayer>,
     mut text: Single<&mut Text, With<NetworkInfoText>>,
+    mut last_snapshot: Local<String>,
 ) {
-    if !role.is_changed() && !settings.is_changed() {
-        return;
-    }
-
     let mut lines = vec![
         format!("Mode: {}", role.label()),
         format!("Render distance: {}", settings.render_distance),
@@ -305,5 +390,133 @@ pub fn update_network_info(
     if let Some(err) = role.last_error() {
         lines.push(format!("Error: {err}"));
     }
-    text.0 = lines.join("\n");
+
+    let mut names: Vec<_> = players.iter().map(|player| player.name.clone()).collect();
+    names.sort();
+    if !names.is_empty() {
+        lines.push(format!("Players ({})", names.len()));
+        for name in names {
+            lines.push(format!("  • {name}"));
+        }
+    }
+
+    let snapshot = lines.join("\n");
+    if snapshot != *last_snapshot {
+        text.0 = snapshot.clone();
+        *last_snapshot = snapshot;
+    }
+}
+
+pub fn update_chat_hud(
+    chat_log: Res<ChatLog>,
+    chat_input: Res<ChatInput>,
+    mut log_text: Single<&mut Text, With<ChatLogText>>,
+    prompt: Single<(&mut Text, &mut Visibility), With<ChatInputPrompt>>,
+) {
+    if chat_log.is_changed() {
+        log_text.0 = chat_log.messages.join("\n");
+    }
+
+    if chat_input.is_changed() {
+        let (mut prompt_text, mut visibility) = prompt.into_inner();
+        if chat_input.active {
+            *visibility = Visibility::Visible;
+            prompt_text.0 = format!("> {}", chat_input.buffer);
+        } else {
+            *visibility = Visibility::Hidden;
+            prompt_text.0.clear();
+        }
+    }
+}
+
+pub fn chat_input_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut chat_input: ResMut<ChatInput>,
+    mut chat_log: ResMut<ChatLog>,
+    menu_open: Res<GameMenuOpen>,
+    role: Res<NetworkRole>,
+    local_player: Query<&Name, With<Player>>,
+    mut keyboard_events: MessageReader<KeyboardInput>,
+    mut commands: Commands,
+) {
+    if menu_open.0 {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyT) && !chat_input.active {
+        chat_input.active = true;
+        chat_input.buffer.clear();
+        return;
+    }
+
+    if !chat_input.active {
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Escape) {
+        chat_input.active = false;
+        chat_input.buffer.clear();
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Enter) {
+        let text = chat_input.buffer.trim().to_string();
+        if !text.is_empty() {
+            let sender = local_player
+                .single()
+                .map(|name| name.as_str().to_string())
+                .unwrap_or_else(|_| "Player".to_string());
+
+            match &*role {
+                NetworkRole::Client { .. } => {
+                    commands.client_trigger(ClientChatMessage { sender, text });
+                }
+                NetworkRole::Host { .. } => {
+                    chat_log.push(&sender, &text);
+                    commands.server_trigger(ToClients {
+                        targets: SendTargets::CLIENTS_ONLY,
+                        message: ChatBroadcast { sender, text },
+                    });
+                }
+                NetworkRole::None => {
+                    chat_log.push(&sender, &text);
+                }
+            }
+        }
+        chat_input.active = false;
+        chat_input.buffer.clear();
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::Backspace) {
+        chat_input.buffer.pop();
+        return;
+    }
+
+    for event in keyboard_events.read() {
+        if event.state != ButtonState::Pressed {
+            continue;
+        }
+
+        let chars = chat_typed_characters(event);
+        for ch in chars {
+            if chat_input.buffer.len() >= CHAT_MAX_MESSAGE_LEN {
+                break;
+            }
+            if !ch.is_control() {
+                chat_input.buffer.push(ch);
+            }
+        }
+    }
+}
+
+fn chat_typed_characters(event: &KeyboardInput) -> Vec<char> {
+    if let Some(text) = &event.text {
+        return text.chars().filter(|ch| !ch.is_control()).collect();
+    }
+
+    match &event.logical_key {
+        Key::Character(text) => text.chars().filter(|ch| !ch.is_control()).collect(),
+        _ => Vec::new(),
+    }
 }

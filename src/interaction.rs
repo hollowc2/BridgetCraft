@@ -5,9 +5,13 @@ use bevy_replicon::prelude::{ClientTriggerExt, ServerTriggerExt, ToClients, Send
 use bevy_voxel_world::prelude::*;
 
 use crate::audio::{voxel_block_at, GameAudio};
+use crate::game_settings::GameSettings;
 use crate::block::SavedVoxel;
 use crate::gamepad::select_primary;
 use crate::item::{block_break_seconds, HotbarSelection};
+
+const HIT_OUTLINE: Color = Color::srgba(1.0, 1.0, 1.0, 0.92);
+const PLACE_OUTLINE: Color = Color::srgba(0.25, 1.0, 0.35, 0.65);
 use crate::net::replicate::BlockEditRequest;
 use crate::net::NetworkRole;
 use crate::save::{record_edit, WorldEdits};
@@ -83,6 +87,30 @@ pub fn update_block_target(
     let _ = buttons;
 }
 
+pub fn draw_block_target_outline(
+    target: Single<&BlockTarget>,
+    selection: Res<HotbarSelection>,
+    mut gizmos: Gizmos,
+) {
+    if let Some(hit_pos) = target.hit_pos {
+        let center = hit_pos.as_vec3() + Vec3::splat(0.5);
+        gizmos.cube(
+            Transform::from_translation(center).with_scale(Vec3::splat(1.005)),
+            HIT_OUTLINE,
+        );
+    }
+
+    if selection.selected_block().is_some() {
+        if let Some(place_pos) = target.place_pos {
+            let center = place_pos.as_vec3() + Vec3::splat(0.5);
+            gizmos.cube(
+                Transform::from_translation(center).with_scale(Vec3::splat(1.005)),
+                PLACE_OUTLINE,
+            );
+        }
+    }
+}
+
 fn break_held(buttons: &ButtonInput<MouseButton>, gamepad: Option<&Gamepad>) -> bool {
     buttons.pressed(MouseButton::Left)
         || gamepad.is_some_and(|gamepad| {
@@ -146,6 +174,7 @@ pub fn handle_block_interaction(
     mut break_state: ResMut<BlockBreakState>,
     role: Res<NetworkRole>,
     terrain: Res<ProceduralTerrain>,
+    game_settings: Res<GameSettings>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
@@ -160,7 +189,7 @@ pub fn handle_block_interaction(
                 });
             } else if let Some(block) = voxel_block_at(&voxel_world, &terrain, pos) {
                 apply_block_edit(&mut pending, &mut edits, pos, WorldVoxel::Air);
-                audio.play_block_break(&mut commands, block, pos);
+                audio.play_block_break(&mut commands, &game_settings, block, pos);
                 if role.is_host() {
                     commands.server_trigger(ToClients {
                         targets: SendTargets::CLIENTS_ONLY,
@@ -197,7 +226,7 @@ pub fn handle_block_interaction(
 
     let voxel = block.to_world_voxel();
     apply_block_edit(&mut pending, &mut edits, pos, voxel);
-    audio.play_block_place(&mut commands, block, pos);
+    audio.play_block_place(&mut commands, &game_settings, block, pos);
     if role.is_host() {
         commands.server_trigger(ToClients {
             targets: SendTargets::CLIENTS_ONLY,

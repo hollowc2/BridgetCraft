@@ -27,9 +27,9 @@ use game_settings::{
     sync_network_game_settings, GameSettings,
 };
 use interaction::{
-    apply_pending_to_world, flush_pending_block_edits, handle_block_interaction,
-    update_block_break_progress, update_block_target, BlockBreakState, BlockTarget,
-    PendingBlockEdits,
+    apply_pending_to_world, draw_block_target_outline, flush_pending_block_edits,
+    handle_block_interaction, update_block_break_progress, update_block_target,
+    BlockBreakState, BlockTarget, PendingBlockEdits,
 };
 use net::host::show_host_message;
 use net::{NetworkPlugin, NetworkRole};
@@ -39,7 +39,11 @@ use player::{
     spawn_player, sync_player_camera, PlayerSettings,
 };
 use save::{auto_save_system, load_world_edits, save_on_exit, SavePlugin, SaveTimer, WorldEdits};
-use ui::hud::{hotbar_scroll, spawn_hud, update_hotbar_hud, update_network_info};
+use net::replicate::{ChatInput, ChatLog};
+use ui::hud::{
+    chat_input_system, hotbar_scroll, spawn_hud, update_chat_hud, update_hotbar_hud,
+    update_network_info,
+};
 use ui::menu::{
     cleanup_menu, menu_button_interaction, menu_input_display, menu_input_focus,
     menu_input_keyboard, menu_input_unfocus, menu_player_name, spawn_main_menu, MenuFocus,
@@ -144,6 +148,8 @@ fn main() {
     .init_resource::<GameMenuOpen>()
     .init_resource::<GameMenuPanelState>()
     .init_resource::<WorldLoadState>()
+    .init_resource::<ChatLog>()
+    .init_resource::<ChatInput>()
     .insert_resource(Time::<Fixed>::from_hz(60.0))
     .add_systems(Startup, setup_ui_camera)
     .add_systems(
@@ -212,11 +218,20 @@ fn main() {
             follow_sky_to_player,
             update_celestial_bodies.after(follow_sky_to_player),
             update_block_target.after(sync_player_camera),
+            draw_block_target_outline.after(update_block_target),
             update_block_break_progress.after(update_block_target),
             handle_block_interaction.after(update_block_break_progress),
+        )
+            .run_if(in_state(AppState::InGame).and(menu_closed).and(not_loading)),
+    )
+    .add_systems(
+        Update,
+        (
             update_hotbar_hud,
             hotbar_scroll,
             update_network_info,
+            update_chat_hud,
+            chat_input_system,
             auto_save_system,
             save_on_exit,
             apply_shadow_settings,

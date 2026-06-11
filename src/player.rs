@@ -5,6 +5,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PresentMode};
 use bevy_voxel_world::prelude::*;
 
 use crate::audio::{spatial_audio_listener, GameAudio};
+use crate::game_settings::GameSettings;
 use crate::block::BlockId;
 use crate::gamepad::select_primary;
 use crate::interaction::PendingBlockEdits;
@@ -359,6 +360,7 @@ pub fn player_movement(
     pending: Res<PendingBlockEdits>,
     mut players: Query<(&mut Transform, &mut PlayerController), With<Player>>,
     voxel_world: VoxelWorld<BridgetWorld>,
+    game_settings: Res<GameSettings>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
@@ -484,6 +486,7 @@ pub fn player_movement(
         if controller.footstep_timer.just_finished() {
             audio.play_footstep_at_feet(
                 &mut commands,
+                &game_settings,
                 &voxel_world,
                 &terrain,
                 transform.translation,

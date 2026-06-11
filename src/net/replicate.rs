@@ -4,6 +4,7 @@ use bevy_voxel_world::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::{voxel_block_at, GameAudio};
+use crate::game_settings::GameSettings;
 use crate::block::{BlockId, SavedVoxel};
 use crate::interaction::{apply_block_edit, PendingBlockEdits};
 use crate::player::Player;
@@ -43,6 +44,47 @@ pub struct BlockEditBroadcast {
 #[derive(Event, Serialize, Deserialize, Clone, Copy)]
 pub struct WorldRevertBroadcast;
 
+#[derive(Event, Serialize, Deserialize, Clone)]
+pub struct ClientChatMessage {
+    pub sender: String,
+    pub text: String,
+}
+
+#[derive(Event, Serialize, Deserialize, Clone)]
+pub struct ChatBroadcast {
+    pub sender: String,
+    pub text: String,
+}
+
+#[derive(Component)]
+pub struct HeldBlockCube {
+    pub material: Handle<StandardMaterial>,
+}
+
+pub const CHAT_MAX_LINES: usize = 20;
+pub const CHAT_MAX_MESSAGE_LEN: usize = 200;
+
+#[derive(Resource, Default)]
+pub struct ChatLog {
+    pub messages: Vec<String>,
+}
+
+impl ChatLog {
+    pub fn push(&mut self, sender: &str, text: &str) {
+        self.messages.push(format!("{sender}: {text}"));
+        if self.messages.len() > CHAT_MAX_LINES {
+            let overflow = self.messages.len() - CHAT_MAX_LINES;
+            self.messages.drain(0..overflow);
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ChatInput {
+    pub active: bool,
+    pub buffer: String,
+}
+
 #[derive(Component, Serialize, Deserialize, Clone, Copy)]
 #[require(Replicated)]
 pub struct NetworkGameSettings {
@@ -65,15 +107,20 @@ impl Plugin for ReplicatePlugin {
             .add_client_event::<BlockEditRequest>(Channel::Unordered)
             .add_server_event::<BlockEditBroadcast>(Channel::Unordered)
             .add_server_event::<WorldRevertBroadcast>(Channel::Unordered)
+            .add_client_event::<ClientChatMessage>(Channel::Unordered)
+            .add_server_event::<ChatBroadcast>(Channel::Unordered)
             .add_observer(apply_remote_block_edit)
             .add_observer(apply_block_edit_broadcast)
             .add_observer(apply_world_revert_broadcast)
+            .add_observer(relay_client_chat)
+            .add_observer(apply_chat_broadcast)
             .add_observer(spawn_remote_player_visual)
             .add_systems(
                 Update,
                 (
                     sync_local_player_network_data,
                     sync_network_transforms,
+                    update_held_block_cubes,
                     tag_remote_players,
                 ),
             );
@@ -108,6 +155,7 @@ fn apply_block_edit_broadcast(
     mut edits: ResMut<WorldEdits>,
     role: Res<crate::net::NetworkRole>,
     terrain: Res<ProceduralTerrain>,
+    game_settings: Res<GameSettings>,
     mut audio: ResMut<GameAudio>,
     mut commands: Commands,
 ) {
@@ -119,7 +167,7 @@ fn apply_block_edit_broadcast(
         SavedVoxel::Air => {
             if let Some(block) = voxel_block_at(&voxel_world, &terrain, broadcast.pos) {
                 apply_block_edit(&mut pending, &mut edits, broadcast.pos, WorldVoxel::Air);
-                audio.play_block_break(&mut commands, block, broadcast.pos);
+                audio.play_block_break(&mut commands, &game_settings, block, broadcast.pos);
             }
         }
         SavedVoxel::Solid(material) => {
@@ -130,10 +178,37 @@ fn apply_block_edit_broadcast(
                 broadcast.voxel.to_world_voxel(),
             );
             if let Some(block) = BlockId::from_material(material) {
-                audio.play_block_place(&mut commands, block, broadcast.pos);
+                audio.play_block_place(&mut commands, &game_settings, block, broadcast.pos);
             }
         }
     }
+}
+
+fn relay_client_chat(
+    message: On<FromClient<ClientChatMessage>>,
+    mut commands: Commands,
+) {
+    let text = message.text.trim();
+    if text.is_empty() || text.len() > CHAT_MAX_MESSAGE_LEN {
+        return;
+    }
+
+    let sender = message.sender.trim();
+    if sender.is_empty() {
+        return;
+    }
+
+    commands.server_trigger(ToClients {
+        targets: SendTargets::All,
+        message: ChatBroadcast {
+            sender: sender.to_string(),
+            text: text.to_string(),
+        },
+    });
+}
+
+fn apply_chat_broadcast(broadcast: On<ChatBroadcast>, mut chat: ResMut<ChatLog>) {
+    chat.push(&broadcast.sender, &broadcast.text);
 }
 
 fn apply_world_revert_broadcast(
@@ -196,7 +271,43 @@ fn spawn_remote_player_visual(
             TextColor(Color::WHITE),
             Transform::from_xyz(0.0, 2.2, 0.0),
         ));
+
+        let held_material = materials.add(StandardMaterial {
+            base_color: BlockId::from_material(network_player.selected_block)
+                .map(|block| block.preview_color())
+                .unwrap_or(Color::srgb(0.7, 0.7, 0.7)),
+            ..default()
+        });
+        parent.spawn((
+            HeldBlockCube {
+                material: held_material.clone(),
+            },
+            Mesh3d(meshes.add(Cuboid::new(0.2, 0.2, 0.2))),
+            MeshMaterial3d(held_material),
+            Transform::from_xyz(0.35, 1.05, 0.3),
+        ));
     });
+}
+
+fn update_held_block_cubes(
+    players: Query<(&NetworkPlayer, &Children), (With<RemotePlayerBody>, Changed<NetworkPlayer>)>,
+    cubes: Query<&HeldBlockCube>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (network_player, children) in &players {
+        let color = BlockId::from_material(network_player.selected_block)
+            .map(|block| block.preview_color())
+            .unwrap_or(Color::srgb(0.7, 0.7, 0.7));
+
+        for child in children.iter() {
+            let Ok(held) = cubes.get(child) else {
+                continue;
+            };
+            if let Some(material) = materials.get_mut(&held.material) {
+                material.base_color = color;
+            }
+        }
+    }
 }
 
 fn sync_local_player_network_data(

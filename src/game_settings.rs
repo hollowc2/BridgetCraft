@@ -6,11 +6,19 @@ use crate::net::NetworkRole;
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct GameSettings {
     pub speed: f32,
+    pub master_volume: f32,
+    pub sfx_volume: f32,
+    pub ui_volume: f32,
 }
 
 impl Default for GameSettings {
     fn default() -> Self {
-        Self { speed: 1.0 }
+        Self {
+            speed: 1.0,
+            master_volume: 1.0,
+            sfx_volume: 1.0,
+            ui_volume: 1.0,
+        }
     }
 }
 
@@ -21,10 +29,22 @@ impl GameSettings {
     pub fn clamp_speed(speed: f32) -> f32 {
         speed.clamp(Self::MIN_SPEED, Self::MAX_SPEED)
     }
+
+    pub fn clamp_volume(volume: f32) -> f32 {
+        volume.clamp(0.0, 1.0)
+    }
+
+    pub fn ui_level(self, base: f32) -> f32 {
+        base * Self::clamp_volume(self.ui_volume) * Self::clamp_volume(self.master_volume)
+    }
+
+    pub fn sfx_level(self, base: f32) -> f32 {
+        base * Self::clamp_volume(self.sfx_volume) * Self::clamp_volume(self.master_volume)
+    }
 }
 
 pub fn reset_game_settings(mut settings: ResMut<GameSettings>, mut time: ResMut<Time<Virtual>>) {
-    settings.speed = 1.0;
+    *settings = GameSettings::default();
     time.set_relative_speed(1.0);
 }
 

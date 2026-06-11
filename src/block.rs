@@ -1,3 +1,4 @@
+use bevy::prelude::Color;
 use bevy_voxel_world::prelude::WorldVoxel;
 use serde::{Deserialize, Serialize};
 
@@ -199,6 +200,32 @@ impl BlockId {
 
     pub fn to_world_voxel(self) -> WorldVoxel<u8> {
         WorldVoxel::Solid(self.as_material())
+    }
+
+    /// Approximate tint for held-block previews on player avatars.
+    pub fn preview_color(self) -> Color {
+        match self {
+            BlockId::DirtGrass => Color::srgb(0.34, 0.62, 0.24),
+            BlockId::Dirt => Color::srgb(0.55, 0.38, 0.22),
+            BlockId::Stone => Color::srgb(0.55, 0.55, 0.58),
+            BlockId::Sand => Color::srgb(0.86, 0.78, 0.52),
+            BlockId::Wood => Color::srgb(0.58, 0.4, 0.22),
+            BlockId::BrickRed => Color::srgb(0.72, 0.32, 0.24),
+            BlockId::BrickGrey => Color::srgb(0.55, 0.55, 0.55),
+            BlockId::Glass => Color::srgba(0.72, 0.88, 0.95, 0.65),
+            BlockId::Gravel => Color::srgb(0.62, 0.6, 0.58),
+            BlockId::Clay => Color::srgb(0.62, 0.48, 0.42),
+            BlockId::Snow => Color::srgb(0.92, 0.94, 0.98),
+            BlockId::Leaves => Color::srgb(0.28, 0.58, 0.22),
+            BlockId::Trunk => Color::srgb(0.42, 0.28, 0.16),
+            BlockId::TrunkWhite => Color::srgb(0.82, 0.78, 0.72),
+            BlockId::Water => Color::srgba(0.22, 0.45, 0.82, 0.75),
+            BlockId::Cobble => Color::srgb(0.48, 0.48, 0.5),
+            BlockId::Planks => Color::srgb(0.72, 0.55, 0.32),
+            BlockId::Wool => Color::srgb(0.92, 0.92, 0.92),
+            BlockId::Glowstone => Color::srgb(0.95, 0.88, 0.45),
+            BlockId::GrassDecor => Color::srgb(0.4, 0.68, 0.28),
+        }
     }
 }
 
